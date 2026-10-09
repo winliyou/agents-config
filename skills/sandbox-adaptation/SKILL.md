@@ -96,11 +96,11 @@ crashpad 写 `~/Library/... Operation not permitted`，
 - 崩溃细读 `~/Library/Logs/DiagnosticReports/*.ips`（首行 header JSON + 正文 JSON，含 parentProc/exception/termination）；
 - 沙盒内 localhost 网络（HTTP/WS/fetch）不受限：连通性用 curl/fetch 实测。本次「WS 连不上」实为 Chrome 111+ 只认带 UUID 的 browser WS 路径（短路径 404），并非沙盒网络限制。
 
-**为何不可解（停止尝试的时机）**：
+**补充实测（历史排查记录，结论已被下文「降低子进程沙盒的判定规则」取代）**：
 - `launchctl bootstrap gui/<uid>` 从沙盒内提交也失败（I/O error 5）——launchd 代理路径被断；
-- `--no-sandbox` 属降低子进程隔离等级，须用户明确同意，默认不选（判定规则见下节）。
+- ~~`--no-sandbox` 属降低子进程隔离等级，须用户明确同意，默认不选~~ → agent-browser/Chrome 场景**已获用户授权**，外层有沙盒时自动注入 `--no-sandbox` 即可零提权跑通（判定规则与授权范围见下文「降低子进程沙盒的判定规则」；已固化进 `~/.local/bin/agent-browser` 包装器）。
 
-**正确出路**（按优先级）：
+**兜底出路**（仅当上述判定规则不适用，如自研 CDP 管线等拿不到自动注入的场景，按优先级）：
 1. 请用户在自己的终端跑一键脚本，在沙盒外拉起实例（如 gemini-gen 的 chrome-start.sh：清残留 Singleton 锁 → open -gna 后台拉起不抢焦点 → 等端口就绪）；daemon 侧只做端口探测与清晰报错指引，不做启动重试。
 2. 经用户同意后，仅对**启动命令**申请单次完全访问权限（等同用户手跑），日常运行回到受限模式。
 
@@ -210,10 +210,11 @@ cmd > log 2>&1; echo "[exit=$?]"; tail -n 20 log   # 落盘后取真实退出码
 **根因**：buildx 把构建器活动状态写在 `$DOCKER_CONFIG/buildx/`（默认 `~/.docker/buildx/`），
 home 下不可写——与构建本身无关。
 
-**解法**（零提权，把 docker CLI 配置目录整体重定向到 workspace）：
+**解法**（零提权，把 docker CLI 配置目录整体重定向到 workspace；**必须整体复制 `contexts/`、`cli-plugins/`、`config.json` 等，缺一不可——只复制 `buildx/` 会静默丢失 context，实测记录见 `docker-workflow` skill「DOCKER_CONFIG 重定向」一节**）：
 
 ```bash
 export DOCKER_CONFIG=$PWD/.workwork/docker-config
+cp -R ~/.docker/contexts ~/.docker/cli-plugins ~/.docker/*.json "$DOCKER_CONFIG"/ 2>/dev/null || true
 docker compose --profile prod build backend frontend-build
 ```
 
