@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# agent-browser 包装器（用户级，PATH 优先级高于 ~/.bun/bin）：
+#   1) 会话级 session 固化——一个 DSH 会话固定用一个 agent-browser session；
+#   2) 沙盒自适应——受限沙盒内重定向 socket/profile 到可写目录；
+#   3) Chrome 沙盒按环境自适应——**只有存在外层沙盒时才关 Chrome 内层沙盒**。
+#
+# 为什么要 session 固化：agent-browser 默认 session 名是 "default"（全局共享），
+# 每个不同的 --session 名 = 一个新 daemon + 一个新浏览器实例。若任务连用户日常
+# Chrome（--cdp/--auto-connect），每次新握手都会触发 Chrome「正在请求远程控制」
+# 弹窗。靠"每次记得写 --session"的纪律无法保证，故在此统一注入。
+#
+# 为什么需要沙盒自适应（2026-09-25 实测，workspace-write 模式下零提权跑通）：
+#   ① socket 目录 ~/.agent-browser 不可写 → daemon 起不来
+#      报错：Socket directory '/Users/liyou/.agent-browser' is not writable
+#   ② Chrome 启动失败：sandbox initialization failed: Operation not permitted
+#      （表层常表现为 "Failed to initialize sandbox" / "GPU process isn't usable"）
+#      根因：macOS Seatbelt 不支持嵌套——外层已有 sandbox-exec 时，Chrome 再调
+#      sandbox_init() 装自己的 profile 会被拒。**与目录无关**（已实测：重定向
+#      HOME/user-data-dir/crash-dumps-dir 均无效；且 macOS Chrome 用
+#      NSHomeDirectory() 定位，不读 HOME 变量）。
+#
+# 关于 Chrome 沙盒的取舍（本包装器的策略）：
+#   运行环境**已有**沙盒（如 DSH 的 workspace-write）→ 关掉 Chrome 内层沙盒
+#     （--no-sandbox）。此时隔离仍由外层沙盒提供，且不关会导致浏览器根本起不来。
+#   运行环境**没有**沙盒（用户手动在终端跑、或提权执行）→ **保持 Chrome 原生沙盒**，
+#     不注入任何参数，让浏览器拥有完整的两层防护。
+#   判定手段：探测「当前能否再创建一层 Seatbelt 沙盒」——
+#     sandbox-exec -p '(version 1)(allow default)' /usr/bin/true
+#     失败(Operation not permitted) ⇒ 已在沙盒内 ⇒ 需 --no-sandbox
+#     成功(exit 0)                 ⇒ 无外层沙盒 ⇒ 保留 Chrome 沙盒
+#
+# 规则：调用方显式指定的一律尊重，绝不覆盖（--session/--profile/--args 及其同名
+#       环境变量）；不在 DSH 会话内时保持上游默认行为。
+set -euo pipefail
+
+REAL="$HOME/.bun/bin/agent-browser"
+
+# ---------- 解析调用方是否已显式指定 ----------
+has_session_flag=0
+has_profile_flag=0
+has_args_flag=0
+for arg in "$@"; do
+  case "$arg" in
+    --session|--session=*) has_session_flag=1 ;;
+    --profile|--profile=*) has_profile_flag=1 ;;
+    --args|--args=*)       has_args_flag=1 ;;
+  esac
+done
+
+# ---------- 1) 会话级 session 固化 ----------
+if [ "$has_session_flag" -eq 0 ] && [ -z "${AGENT_BROWSER_SESSION:-}" ] && [ -n "${DSH_SESSION_ID:-}" ]; then
+  short="${DSH_SESSION_ID##*-}"          # 会话 id 末段，唯一且稳定
+  export AGENT_BROWSER_SESSION="dsh-${short:0:8}"
+fi
+
+# ---------- 2) 目录重定向（仅在默认 socket 目录真正不可写时） ----------
+# 注意：不能用 [ ! -d ] 判断——全新机器上 ~/.agent-browser 尚不存在但完全可建，
+# 那是正常环境，不是受限。唯一可靠判据是"实际写一次"。
+AB_HOME="${AGENT_BROWSER_HOME:-$HOME/.agent-browser}"
+sbx=""
+_AB_PROBE="$AB_HOME/.probe-$$"
+if mkdir -p "$AB_HOME" 2>/dev/null && touch "$_AB_PROBE" 2>/dev/null; then
+  rm -f "$_AB_PROBE"          # 可写 → 正常环境，不干预（保留上游默认落点）
+else
+  # 落点优先级：TMPDIR（会话内稳定、不污染项目）→ 当前目录 .workwork → /tmp
+  for cand in "${TMPDIR:-}" "${PWD:-}/.workwork" "/tmp"; do
+    [ -z "$cand" ] && continue
+    cand="${cand%/}/agent-browser-sandbox"
+    if mkdir -p "$cand/sock" "$cand/chrome-profile" 2>/dev/null; then sbx="$cand"; break; fi
+  done
+
+  if [ -n "$sbx" ]; then
+    # socket/状态目录（daemon 用）
+    if [ -z "${AGENT_BROWSER_SOCKET_DIR:-}" ]; then
+      export AGENT_BROWSER_SOCKET_DIR="$sbx/sock"
+    fi
+    # Chrome profile（避免写 ~/Library/Application Support 被拒）
+    if [ "$has_profile_flag" -eq 0 ] && [ -z "${AGENT_BROWSER_PROFILE:-}" ]; then
+      set -- --profile "$sbx/chrome-profile" "$@"
+    fi
+  fi
+fi
+
+# ---------- 3) Chrome 沙盒：仅在"已有外层沙盒"时关闭内层 ----------
+# 只在真正会启动浏览器的调用上做探测，纯查询类命令不打扰。
+# 探测：能否再创建一层 Seatbelt 沙盒。失败 ⇒ 外层已有沙盒。
+if [ "$has_args_flag" -eq 0 ] && [ "${AGENT_BROWSER_CHROME_SANDBOX:-auto}" != "native" ]; then
+  nested_ok=1
+  if [ -x /usr/bin/sandbox-exec ]; then
+    if /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1; then
+      nested_ok=1     # 无外层沙盒 → 保留 Chrome 原生沙盒
+    else
+      nested_ok=0     # 已在沙盒内 → Chrome 自身沙盒无法初始化，必须关闭
+    fi
+  fi
+
+  if [ "$nested_ok" -eq 0 ]; then
+    if [ -n "${AGENT_BROWSER_ARGS:-}" ]; then
+      export AGENT_BROWSER_ARGS="${AGENT_BROWSER_ARGS},--no-sandbox"
+    else
+      export AGENT_BROWSER_ARGS="--no-sandbox"
+    fi
+  fi
+fi
+
+exec "$REAL" "$@"
