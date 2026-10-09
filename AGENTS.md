@@ -51,8 +51,8 @@
 - **禁止改写 main/master 历史**（主工作树/main 分支）：`reset --hard`、`push --force`、`rebase`；分支内整理历史一律在 Worktree 中进行。
 - **仅当需要更改项目文件时才新建 Worktree**（会产生提交的操作，单文件/typo/简单 bugfix 无例外）：开发分支必须通过 `git worktree add` 独占目录创建，严禁在主工作树上修改/提交代码或切分支。
 - 合并统一用 `git merge --ff-only`，**禁止 Merge Commit**。
-- **开发分支（feature/fix/refactor 等）一律禁止推送到远程**；`git push` 只允许推送合并后的主分支与发版 tag。**唯一例外：dsh-plugins 的 `alpha` 适配线**（按其项目 AGENTS.md 的待命/活跃/收敛三期执行，收敛后彻底删除）；远程只应存在主干分支、dsh-plugins 的 `alpha` 与 CI 自动创建的分支（dependabot 等）。
-- **发版 tag 一个一个推，推完确认再推下一个**：单次推超过 3 个 tag 时 GitHub 不产生任何 `push` 事件（CI 静默不跑、Release 不建，而 `git push` 不报错）；连推还会被并发组顶掉流水。禁止 `git push --tags` 与 `--follow-tags`。
+- **开发分支（feature/fix/refactor 等）一律禁止推送到远程**；`git push` 只允许推送合并后的主分支与发版 tag。**唯一例外：dsh-plugins 的 `alpha` 适配线**（收敛后彻底删除）；远程只应存在主干分支、dsh-plugins 的 `alpha` 与 CI 自动创建的分支（dependabot 等）。
+- **发版 tag 一个一个推，推完确认再推下一个**；禁止 `git push --tags` 与 `--follow-tags`（批量推送会静默不触发 CI，机制见 `git-workflow` skill）。
 - 详细流程（worktree 创建/合并后清理/commit 格式与模型署名/打 tag 与推送纪律）见 `git-workflow` skill。
 
 ## 技能使用原则

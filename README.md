@@ -14,3 +14,7 @@ ln -s ~/.agents/AGENTS.md ~/AGENTS.md
 - `skills/local-environment/` 记录的是单台主机的实测事实（路径、已装工具、凭据归档位置），换主机必须逐条重新核实改写；
 - `~/work/dogod/cf_token_and_cert/` 等凭据目录**不在本仓库**，需按 `local-environment` 的描述在新主机单独重建；
 - 项目级配置（各仓库的 `AGENTS.md` 与 `.agents/skills/`）随各项目仓库走，不在这里。
+
+## 第三方 skill
+
+`skills/agent-browser` 来自 `vercel-labs/agent-browser`（由 `.skill-lock.json` 锁定来源与 hash），**不要手改**——更新会覆盖。自建 skill 在 `skills/` 下其余目录。
