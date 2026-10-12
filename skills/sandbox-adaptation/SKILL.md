@@ -258,3 +258,32 @@ docker compose --profile prod build backend frontend-build
 - **不得跳过功能验证**：失败了就说失败并给出原因，不要用"降级工具链、改配置绕过检查、禁用 lint/测试"之类手段制造通过假象。
 - 子进程自带沙盒（如浏览器引擎的沙盒）与当前沙盒嵌套冲突时，**降低子进程沙盒属于降低隔离等级**，需要明确权衡并说明理由与影响面（仅影响该子进程、是否在本地调试环境等）；能用其他方式（重定向目录、调整启动参数）解决时优先用其他方式，**但用户已授权或用户另行同意时不必顾虑**。
 - 工具确实没有任何可重定向的配置面（路径硬编码且不可配）时，**向用户说明并请求授权**（把该路径加入白名单、对单条命令放行更宽松权限、或请用户在沙盒外执行），而不是自行绕过、也不是就此放弃。
+
+### 实战案例：Go 构建缓存 EPERM（2026-10-12 实测，music_player 仓库）
+
+**误导性表象**：`go vet ./...` 与 `go test ./...` 在 `workspace-write` 下失败，
+报错与代码无关：
+
+```
+open /Users/<user>/Library/Caches/go-build/48/48c0...-d: operation not permitted
+FAIL	music_server [setup failed]
+```
+
+**关键陷阱：退出码会说谎。** `go vet` 打完上面那行 EPERM 后**仍返回 exit 0**，
+只看退出码会误判"检查通过"，实际什么都没跑。判据要看**输出里是否出现
+`operation not permitted`**，不要只看 `echo $?`。
+
+**解法**（零提权，缓存落 workspace）：
+
+```bash
+mkdir -p .workwork/caches/go .workwork/tmp
+export GOCACHE=$PWD/.workwork/caches/go TMPDIR=$PWD/.workwork/tmp
+go env GOCACHE          # 确认生效
+go vet ./... && go test -race -count=1 ./...
+```
+
+零第三方依赖的仓库（无 go.sum）`GOMODCACHE` 一并重定向即可；有依赖时同样适用。
+`.workwork/` 已被 gitignore（按工作树隔离），不会污染仓库。
+
+**同类规律**：编译/包管理器缓存类工具的 EPERM 都按此法处理（见上方目录类别表），
+无需提权、无需放弃功能。
