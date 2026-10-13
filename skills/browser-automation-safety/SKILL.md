@@ -210,7 +210,10 @@ const SESSION = 'travel-smoke';
 1. **拿 WS 端点**：读用户 Chrome profile 的 `DevToolsActivePort` 文件
    （`~/Library/Application Support/Google/Chrome/DevToolsActivePort`，两行：
    端口 + `/devtools/browser/<uuid>`）。HTTP `/json/*` 对默认 profile 404，
-   不影响 WS 直连。
+   不影响 WS 直连。**文件 mtime 偏旧 ≠ 端点失效**：Chrome 不重启则端口与 UUID
+   不变（2026-10-14 实测：mtime 6 天前的文件仍直连成功）；失效的判据是
+   端口无监听（`lsof -iTCP:<port> -sTCP:LISTEN`）或 WS 连接失败，此时停下来
+   请用户以调试模式重启 Chrome，禁止自行重启用户 Chrome 或反复试探。
 2. **找页并 attach**：`Target.getTargets` 按 URL 找页 targetId →
    `Target.attachToTarget {targetId, flatten:true}`。
 3. **取投放点**：`Runtime.evaluate` 读 composer 的
