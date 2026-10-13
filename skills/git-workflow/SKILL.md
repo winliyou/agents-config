@@ -37,7 +37,10 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 Model: <模型名>
 ```
 
-- **多行/含引号的提交消息一律用 `-F <文件>`，不要内联 `-m`（2026-09-25 实测）**：消息里出现 ASCII 双引号时，外层 shell 的双引号包裹会在第一个 `"` 处截断，`git commit` 静默失败或把消息剩余部分当独立命令执行——stdout 还常常是空的，极易误以为成功。安全做法：把消息写入临时文件（如 `.workwork/commit-msg.txt`）后 `git commit -F <文件>`；提交后必须 `git log --oneline` + `git show --stat` 复核提交数与文件归属，不能只看命令退出与否。
+- **多行/含引号的提交消息一律用 `-F <文件>`，不要内联 `-m`（2026-09-25 实测）**：消息里出现 ASCII 双引号时，外层 shell 的双引号包裹会在第一个 `"` 处截断，`git commit` 静默失败或把消息剩余部分当独立命令执行——stdout 还常常是空的，极易误以为成功。安全做法：把消息写入临时文件后 `git commit -F <文件>`；提交后必须 `git log --oneline` + `git show --stat` 复核提交数与文件归属，不能只看命令退出与否。
+
+  **临时文件必须落在被 gitignore 的目录内（2026-10-11 实测）**：写 `.workwork/commit-msg.txt`（目录整体被忽略）是安全的；写成同前缀的**根目录文件** `.workwork-commit-msg.txt` 只差一个 `/`，却不在忽略规则内——`git add -A` 会把它一路带进提交，且因为每次 commit 后 `rm`、下次又新建，会**连续多个提交**都夹带它，直到有人发现。判据：临时文件路径的**父目录**必须出现在 `.gitignore` 里，不能只靠文件名前缀相似。
+
 ### 版本号以 tag 为源（发版项目，源自 media_app 实战）
 
 - 版本号只由 git tag（`vX.Y.Z`）决定：构建期用 `git describe` 读取派生，禁止手改版本文件；打完 tag 即“自动更新版本”，无需改任何文件。
@@ -116,3 +119,11 @@ done
   看到连续失败必须先修再发，不许带红 tag 发布。
 - 同一 commit 双 run（tag 触发 + 分支触发）一绿一红，优先怀疑时间敏感用例 flaky：
   `gh run rerun <id>` 重跑确认；确认 flaky 后应修测试的时间阈值，而不是反复重跑。
+- **GitHub Billing 失败（已解决，2026-10-10）**：winliyou 账号曾因「recent account
+  payments have failed or your spending limit needs to be increased」导致私有仓库
+  Actions 全部 3-13s 即败。**现行策略（用户已定：不再充值）：碰到该注解的失败
+  直接忽略，不 rerun、不排查、不当发布阻塞；正确动作只有一个——把仓库转 public
+  走标准 CI**（public 仓库 Actions 免费不限额，hotspot 已于同日转 public 并核实）。
+  **不要走「私有仓库本地构建发版」的替代路径**——该兜底流程已被本策略废弃，
+  不再维护其操作细节（历史做法见 git 历史 2026-10-10 hotspot v1.3.2 前后的提交）。
+  除 Billing 注解外，CI 失败仍按上两条处理，不得借本条豁免其他红灯。

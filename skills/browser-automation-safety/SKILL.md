@@ -153,9 +153,6 @@ agent-browser --auto-connect <命令>          # 等价：AGENT_BROWSER_CDP=9222
 - **先查清监听者是谁再连**：`lsof -iTCP:9222 -sTCP:LISTEN` 只说明有 Chrome 在监听，不说明可以连；再 `lsof -p <pid>` 看打开文件——落在 `~/Library/Application Support/Google/Chrome/Default/` 就是用户日常 Chrome，**直接换独立实例，不要连**（2026-09-25 实测：gemini-gen 旧管线直连 9222 导致每次重连都向用户弹「请求远程控制」，已迁移到独立实例）。AI 会话沙盒常禁 `ps`（报 `/bin/ps: Operation not permitted`），用 lsof 取证。
 - **独立实例三要素**：独立 user-data-dir + 独立端口（如 9223）+ 常驻 daemon 单连接复用（断线退避自愈，严禁 kill/重连循环——同弹窗红线 4）。
 - **Chrome 111+ 握手细节**：browser WS 只认 `/json/version` 返回的带 UUID `webSocketDebuggerUrl`（`/devtools/browser` 短路径 404）；WS 请求带 `Origin` 头会 403；日常 Chrome（默认 profile）对 `/json/version` HTTP 端点返回 404 属正常，独立 profile 返回完整 JSON。
-- **AI 会话沙盒内起 Chrome**：**能起，且本场景通常无需提权**——按「沙盒自适应」与「Chrome 沙盒按环境自适应」两节处理即可（关内层沙盒 `--no-sandbox` + 目录重定向），2026-09-25 已实测零提权跑通。**注意这与本 skill 早前版本的说法不同**：此前把「沙盒内起不来」记成不可解、建议到沙盒外拉起或申请提权——那是**没发现 `--no-sandbox` 与环境自适应之前**的结论，已作废。
-  - 仅当**自研 CDP 管线**（不走 agent-browser，故拿不到包装器的自动注入）需要在沙盒内起 Chrome 时，才由该管线自行加 `--no-sandbox`；仍不必要时不要提权。
-  - 兜底路径（前述手段都不适用时）：请用户在自己终端跑一键脚本在沙盒外拉起（如 gemini-gen 的 chrome-start.sh：清残留 Singleton 锁 → `open -gna` 后台拉起不抢焦点 → 等端口就绪），或经用户同意对**仅启动命令**申请单次完全访问权限；daemon 内只做端口探测与清晰指引，不做启动重试。
 
 ## 脚本化使用时（冒烟测试 / CI）
 
@@ -189,3 +186,45 @@ const SESSION = 'travel-smoke';
   不要被同行的 Crashpad `settings.dat: Operation not permitted` 噪音带偏。解法：
   按报错原文里的 profile 路径 `rm -f <profile>/SingletonLock` 后重试（删除前先 `ls`
   确认目录确属 agent-browser 临时 profile）；无需重建 daemon/session。
+- **长会话劣化：同一 session 反复导航/重载后 eval 陆续返回 null（2026-10-13 实测，
+  fft_cover e2e 冒烟）**：表现为最初可用的 eval 在若干次 reload 后开始返回空/null，
+  清 SW/缓存、重开标签只能临时恢复。解法：**跑批类任务用全新 session，跑完即关**
+  （`--session <新名>` + close），不要复用跨多轮的老会话；结合上面「session 名必须
+  稳定」的规则，这个新名应是项目固定的冒烟专用名，每次运行前先 close 旧实例。
+
+## 用户日常 Chrome 上的 AI 网页自动化（Gemini 等，2026-10-14 实测 fft_cover）
+
+**auto-connect 模式下命令默认跟随用户的「当前活动标签」**——用 `--auto-connect
+--pin-tab` 钉住自己的标签（`tab new <url>` 时带 `--pin-tab` 即建即钉），之后所有
+命令（含截图）只打该标签，用户看哪都不影响。
+
+**唯一可行方案：直连 CDP 用 `Input.dispatchDragEvent` 做真实文件拖拽**
+（2026-10-14 实测：4/4 图片全部附加成功、缩略图完整渲染、Gemini 正常受理）。
+
+### 流程（Node 22+ 内置 WebSocket，无需依赖）
+
+1. **拿 WS 端点**：读用户 Chrome profile 的 `DevToolsActivePort` 文件
+   （`~/Library/Application Support/Google/Chrome/DevToolsActivePort`，两行：
+   端口 + `/devtools/browser/<uuid>`）。HTTP `/json/*` 对默认 profile 404，
+   不影响 WS 直连。
+2. **找页并 attach**：`Target.getTargets` 按 URL 找页 targetId →
+   `Target.attachToTarget {targetId, flatten:true}`。
+3. **取投放点**：`Runtime.evaluate` 读 composer 的
+   `getBoundingClientRect` 中心坐标。
+4. **拖拽**：`Input.dispatchDragEvent` 依次 `dragEnter`/`dragOver`/`drop`，
+   `DragData = {items:[], files:[本地绝对路径...], dragOperationsMask:1}`——
+   **files 传本地绝对路径**，Chromium 按真实系统拖拽处理（isTrusted=true）。
+5. **输入提示词**：真实 click 聚焦 contenteditable →
+   `keyboard inserttext "$(cat prompt.md)"`（CDP Input.insertText，多行中文可靠）。
+6. **发送**：eval 找 aria-label 含 `发送` 的 button 并 click。
+7. **捕获响应**：eval 轮询响应容器 innerText 长度，连续 2 次稳定即完成
+   （高思考等级 1-3 分钟）。
+
+### 注意
+
+- attach + evaluate 偶发渲染器崩溃（`Target crashed`）——捕获后 `Page.reload`
+  等重生、重 attach 即恢复；崩溃会丢 composer 附件状态，需重新拖拽。
+- 附件验证用 `Page.captureScreenshot` 目视确认芯片缩略图（DOM 属性计数不可靠）。
+- 模型/思考等级选择（点 Pro 按钮 → 菜单）：菜单项用
+  `[role=menu] [role=menuitem]` 精确层级选择（「3.1 Pro」→ 重开菜单 → 「高点」）。
+- 页面 Angular 重渲染会复位模型选择与附件状态——每步之间 eval 读 DOM 确认。
