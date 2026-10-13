@@ -119,7 +119,7 @@ DSH 的 `workspace-write` 沙盒只允许写会话工作区，会让 agent-brows
 1. **禁止抢焦点 / 置顶窗口**：不得调用任何 OS 级窗口激活（如 AppleScript `activate`）或置顶行为，不得打断用户的键鼠输入。
 2. **禁止强切用户当前活动标签页**：用户可能正在前台浏览或观看视频，严禁调用 `set active tab` 或粗暴切走其活动页面。
 3. **禁止 `--auto-connect` / `--cdp 9222` 连用户日常 Chrome**（除用户明确要求）：外部 CDP attach 会让 Chrome 弹「有应用正在请求远程控制」，且**每次重连都会再弹一次**。
-4. **禁止 `pkill` 杀 daemon 后重连**，尤其禁止写进重试循环——每次重连 = 再次弹窗轰炸。
+4. **禁止杀 daemon 后重连，禁止一切重建 CDP 连接的形式**（`pkill` daemon、重开 WS 握手、重新 attach、重启浏览器），尤其禁止写进重试循环——Chrome 对**每一条**新的 DevTools 握手都会再弹一次「正在请求远程控制」，重建 N 次 = 弹窗 N 次轰炸，自动化也随之全废（用户必须逐次人工确认）。
 5. **禁止 `close --all`**：会关掉本机其他 agent 的 session。只关自己用的那个。
 6. **禁止每次执行都 `open` 新标签**：制造孤儿标签（见下「标签页复用」）。
 
@@ -203,6 +203,8 @@ const SESSION = 'travel-smoke';
 **唯一可行方案：直连 CDP 用 `Input.dispatchDragEvent` 做真实文件拖拽**
 （2026-10-14 实测：4/4 图片全部附加成功、缩略图完整渲染、Gemini 正常受理）。
 
+**CDP 会话全程复用（2026-10-14 用户重申，弹窗铁律）：整个任务只允许发生一次 browser 级 WS 握手、一次 target attach——下述流程第 1-2 步建立连接后，取坐标、拖拽、输入、发送、轮询响应（第 3-7 步）全部复用这条连接与这个 attach session，直到任务结束。禁止每步操作重开 WS 或重 attach。意外断线只允许单次退避重连；连续失败说明 Chrome 端状态已变，停下来报告用户，严禁循环重连（每条新握手都弹一次窗）。**
+
 ### 流程（Node 22+ 内置 WebSocket，无需依赖）
 
 1. **拿 WS 端点**：读用户 Chrome profile 的 `DevToolsActivePort` 文件
@@ -226,6 +228,7 @@ const SESSION = 'travel-smoke';
 
 - attach + evaluate 偶发渲染器崩溃（`Target crashed`）——捕获后 `Page.reload`
   等重生、重 attach 即恢复；崩溃会丢 composer 附件状态，需重新拖拽。
+  **此处「重 attach」属异常恢复例外（原 session 已随渲染器崩溃死亡），每个任务至多一次；连续崩溃即停并报告，不得反复重生重连。**
 - 附件验证用 `Page.captureScreenshot` 目视确认芯片缩略图（DOM 属性计数不可靠）。
 - 模型/思考等级选择（点 Pro 按钮 → 菜单）：菜单项用
   `[role=menu] [role=menuitem]` 精确层级选择（「3.1 Pro」→ 重开菜单 → 「高点」）。
