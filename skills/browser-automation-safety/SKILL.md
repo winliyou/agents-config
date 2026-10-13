@@ -194,6 +194,8 @@ const SESSION = 'travel-smoke';
 
 ## 用户日常 Chrome 上的 AI 网页自动化（Gemini 等，2026-10-14 实测 fft_cover）
 
+**前提：仅限用户明确要求操作其日常 Chrome（用其登录态）时使用，即上方红线 3 的唯一例外场景；AI 不得自行选择此模式。** 下文直连 CDP 与 `--auto-connect` 是同一前提的两种入口。
+
 **auto-connect 模式下命令默认跟随用户的「当前活动标签」**——用 `--auto-connect
 --pin-tab` 钉住自己的标签（`tab new <url>` 时带 `--pin-tab` 即建即钉），之后所有
 命令（含截图）只打该标签，用户看哪都不影响。

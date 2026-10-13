@@ -39,8 +39,11 @@ expect(aLeft).not.toBe(b.container.querySelector('button')!.style.left);
 - 多个 edit 用 `Promise.all` 并发改**同一文件**会静默丢失部分 edit——同文件多处修改
   串行执行，或一次 node 脚本完成；
 - edit 工具 old_string 报 not found 但文本肉眼可见存在时，直接 node 正则替换更快；
-- bun install 在沙盒内报 `unable to write files to tempdir: EPERM`：`TMPDIR` 重定向
-  无效（bun 不读它），用 `bun install --cache-dir <workspace 内目录>` 即可过。
+- bun install 在沙盒内报 `unable to write files to tempdir: EPERM`：`TMPDIR` 单独
+  重定向无效——真因是包缓存 `~/.bun/install/cache` 不可写，bun 的错误文案有误导
+  （bun 本身读 TMPDIR，不要被「bun 不读它」之类的错误归因带偏），用
+  `bun install --cache-dir <workspace 内目录>` 即可过；权威解法（TMPDIR + 缓存变量
+  全部落 workspace）见 `sandbox-adaptation` skill「bun install 报 tempdir EPERM」一节。
 
 ## 测试替身掩盖传参类型错误 → NaN 传染（2026-10-08，fft_cover 实测）
 
