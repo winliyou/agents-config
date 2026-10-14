@@ -127,6 +127,30 @@ const killAllDaemons = () => {
 
 await cleanOrphanDaemons();
 
+// 兜底清理:清掉"已死房客"留下的状态文件。
+// 2026-10-15 实测发现:房客 daemon 自行退出(空闲 1h 回收/kill)时不会带走 .target/.config,
+// 且部分关闭路径早于本轮修复 → 实测累积了 28 组孤儿文件(有 .target 无 .sock)。
+// 判据严格限定为"既无活跃 socket、进程也不存活",避免误删正在工作的会话。
+const purgeDeadSessionState = () => {
+  try {
+    const fs = require("node:fs");
+    const names = new Set<string>();
+    for (const f of fs.readdirSync(AB_HOME)) {
+      const m = /^((?:dsh|manual)-[^.]+)\.(?:target|config)$/.exec(f);
+      if (m) names.add(m[1]);
+    }
+    for (const n of names) {
+      if (sockExists(AB_HOME + "/" + n + ".sock")) continue;
+      let pid = "";
+      try { pid = fs.readFileSync(AB_HOME + "/" + n + ".pid", "utf8").trim(); } catch {}
+      if (pid && run(["kill", "-0", pid]).exitCode === 0) continue; // 进程还活着,别动
+      for (const ext of ["target", "config", "pid", "stream", "version"]) rmFile(AB_HOME + "/" + n + "." + ext);
+      debug("清理已死会话的残留状态:" + n);
+    }
+  } catch {}
+};
+purgeDeadSessionState();
+
 // ---------- 有头静默(先算好:owner 冷启动与正式执行共用) ----------
 const inject: string[] = [];
 const injectEnv: Record<string, string> = {};
