@@ -285,14 +285,43 @@ if (subcmd === "close") {
   }
 }
 
-// ---------- 房客 close:先关掉自己在 owner Chrome 里的 pinned tab,再退自己的 daemon ----------
-// 实测:房客 close 只退 daemon,不会关掉它在 owner 里开的 tab → 标签泄漏(曾累积 5 个僵尸 tab)。
-if (subcmd === "close" && guest && !hasCloseAll) {
-  let tid = "";
-  try { tid = (JSON.parse(await Bun.file(AB_HOME + "/" + guestName + ".target").text()) as { targetId?: string }).targetId ?? ""; } catch {}
-  if (tid) {
-    run([REAL, "--session", guestName, "--cdp", guestPort, "--pin-tab", "tab", "close", tid]);
-    debug("房客 close:已关闭自己的 tab " + tid);
+// ---------- 会话关闭时的标签与状态清理 ----------
+// 实测缺陷(2026-10-15):显式 `--session <房客名> close` 只退 daemon,既不关它在 owner Chrome 里
+// 的 pinned tab,也不清残留状态文件(.target/.config)→ 标签泄漏。此处统一处理:
+// 无论"隐式房客(本会话)"还是"显式指定的房客",关闭前都先摘掉它的标签,关闭后清净状态文件。
+const sessionTarget = async (name: string): Promise<{ targetId?: string; url?: string }> => {
+  try { return JSON.parse(await Bun.file(AB_HOME + "/" + name + ".target").text()) as { targetId?: string; url?: string }; } catch { return {}; }
+};
+// 该 session 的 daemon 是否通过 CDP 连着 owner 端口 = 它是 attach 上来的房客(而非自带 Chrome 的独立实例)。
+// 只有房客才需要替它摘标签:独立实例的标签随它自己的 Chrome 一起消失。
+const isGuestDaemon = (name: string, port: string): boolean => {
+  if (!name || !port) return false;
+  let pid = "";
+  try { pid = require("node:fs").readFileSync(AB_HOME + "/" + name + ".pid", "utf8").trim(); } catch { return false; }
+  if (!pid) return false;
+  const out = run(["lsof", "-p", pid, "-a", "-iTCP", "-nP"]).stdout.toString();
+  return out.includes(":" + port) && out.includes("ESTABLISHED");
+};
+const purgeSessionFiles = (name: string) => {
+  if (!name || name === "shared") return;
+  try {
+    const fs = require("node:fs");
+    for (const f of fs.readdirSync(AB_HOME)) if (f.startsWith(name + ".")) rmFile(AB_HOME + "/" + f);
+  } catch {}
+};
+
+let closeSessionName = "";
+if (subcmd === "close" && !hasCloseAll) {
+  closeSessionName = guest ? guestName : hasSessionFlag ? effSession : "";
+}
+if (closeSessionName) {
+  const cport = guest ? guestPort : await discoverPort();
+  if (cport && isGuestDaemon(closeSessionName, cport)) {
+    const t = await sessionTarget(closeSessionName);
+    if (t.targetId) {
+      run([REAL, "--session", closeSessionName, "--cdp", cport, "--pin-tab", "tab", "close", t.targetId]);
+      debug("关闭 " + closeSessionName + ":已摘掉其 pinned tab " + t.targetId);
+    }
   }
 }
 
@@ -336,5 +365,39 @@ try {
 
 const finalSession = injectEnv.AGENT_BROWSER_SESSION ?? process.env.AGENT_BROWSER_SESSION ?? "";
 debug("最终执行:session=" + finalSession + " guest=" + guest + " args=" + JSON.stringify([...inject, ...argv]));
-const proc = Bun.spawnSync([REAL, ...inject, ...argv], { env: childEnv(), stdio: ["inherit", "inherit", "inherit"] });
+
+// stdout 一律 inherit:直接把子进程输出交给原终端,不做缓冲/转发 ——
+// 避免改变上游对 TTY 的判断(格式化输出如 open/snapshot 会因管道而变化)。
+// 只把 stderr 收进管道,用于识别 tab_gone(该错误只写 stderr,stdout 为空,已实测)。
+const spawnChild = () => Bun.spawnSync([REAL, ...inject, ...argv], {
+  env: childEnv(),
+  stdio: ["inherit", "inherit", "pipe"],
+});
+
+// tab_gone 自愈:绑定的 tab 被别人关掉后,上游返回 tab_gone(exit 1, 输出在 stderr),
+// 且**不会更新 .target**(实测)→ 会话从此永久卡死,后续每条命令都报错,只能人工干预。
+// 检测到该错误就用 .target 里记的 lastUrl 自动重绑一次再重试(恰好一次,不形成循环)。
+const runWithTabGoneHeal = () => {
+  if (!guest || subcmd === "close") return spawnChild();
+  const first = spawnChild();
+  const err = first.stderr?.toString() ?? "";
+  if ((first.exitCode ?? 0) !== 0 && /tab_gone/.test(err)) {
+    let lastUrl = "";
+    try { lastUrl = (JSON.parse(require("node:fs").readFileSync(AB_HOME + "/" + guestName + ".target", "utf8")) as { url?: string }).url ?? ""; } catch {}
+    // lastUrl 可能是 data:/blob: 等不可再访问的 URL,只有 http(s) 才值得恢复
+    const safe = /^https?:\/\//.test(lastUrl) ? lastUrl : "about:blank";
+    debug("检测到 tab_gone,用 lastUrl 重绑后重试:" + safe);
+    run([REAL, "--session", guestName, "--cdp", guestPort, "--pin-tab", "tab", "new", safe]);
+    process.stderr.write("[wrapper] 绑定的 tab 已被关闭,已自动重绑到 " + safe + "(取自 lastUrl)。\n");
+    const retry = spawnChild();
+    // 重试若仍失败,报它自己的错误(而不是上面那条已被自愈处理的 tab_gone)
+    if ((retry.exitCode ?? 0) !== 0) process.stderr.write(retry.stderr?.toString() ?? "");
+    return retry;
+  }
+  process.stderr.write(err);
+  return first;
+};
+
+const proc = runWithTabGoneHeal();
+if (closeSessionName && (proc.exitCode ?? 0) === 0) purgeSessionFiles(closeSessionName);
 process.exit(proc.exitCode ?? 0);
