@@ -23,3 +23,24 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 s
 - cwd 跨调用驻留，写文件前先确认目录（源自 dsh-plugins 实战）：shell 的 cwd 在多次工具调用间保留，曾出现“以为在 worktree、实际改了主检出”导致发布产物缺字段。一切会产生文件改动的操作（内联脚本、`sed -i`、代码生成等）必须先 `cd` 进目标目录或写绝对路径；提交前用 `pwd` + `git status` 确认位置。
 - read 按行分页、超长静默截断（源自 hotspot 实战）：超长文件禁止 read→write 整文件往返，写回会静默丢尾（曾一次删掉 500+ 行）。改大文件用字节级精确操作（`sed -i` 按行寻址、python 按行替换），改完用 `git diff --numstat`（增删应对称）+ `wc -l` 对 HEAD 验行数一致；一旦失衡立即 `git checkout` 恢复重做，不要在坏文件上继续改。
 - macOS 自带 bash 3.2 的多字节变量名解析坑（2026-10-07 travel deploy.sh 实测）：脚本里「$VAR」后紧跟多字节字符（如中文省略号 …、中文标点）时，bash 3.2 会把该字符首字节并入变量名解析，报「VAR<0xe2>: unbound variable」并中断脚本；同脚本在 bash 4+/zsh 下正常，极具迷惑性。修复/预防：变量后接非 ASCII 字符时一律加花括号「${VAR}…」显式定界；写脚本时变量后直接跟 CJK 字符的写法直接避免。
+
+（2026-10-15 agent-browser wrapper 再次实测命中，全角句号「。」同样触发；花括号定界修复有效）
+
+## 模板串生成 shell 的规范（TS/JS 模板串 × bash，2026-10-15 会话多次实证）
+
+在编程语言模板字符串里写 bash 是高频事故源，写之前过此清单：
+
+1. **bash 的「美元符+花括号」序列一律转义后写入**——含参数展开、默认值等一切形式，否则被模板引擎当插值解析，报 Unexpected token（2026-10-15 实测：一处参数展开未转义致整个程序解析失败，连带审批等待超时烧掉 12 分钟）。写完目测一遍有无裸序列；**更稳的做法：复杂 bash 片段独立落盘为脚本文件再执行，或在 TS 中改用单引号字符串数组（反引号与美元花括号均无需转义），heredoc 尽量避免**。
+2. **模板串内嵌 markdown 行内代码的反引号会提前终止字符串**——报 missing required property 或 Expression expected（本次各 1 次）。要么全部转义，要么改用单引号字符串。
+3. **edit 的 old_string 从 read 输出原样复制**，禁止凭记忆重打——全角/半角标点（半角逗号 vs 全角逗号、半角冒号 vs 全角冒号）差异必致匹配失败（本次 2 次）。
+4. **bash 片段改完立即 bash -n 语法检查再投入使用**；重要脚本过 shellcheck（本机 0.11.0，`shellcheck -S style <file>`，本次 wrapper 修复后最严格级别零警告）。
+
+## macOS/BSD 工具链与解析规范（2026-10-15 会话实证补充）
+
+1. `cat -A` 不存在（GNU 专属）→ 用 `cat -ev`；GNU 专属选项先验证再用。
+2. grep 模式以 `-` 开头必须 `grep -e` 加模式（或 `--` 分隔）——本次 `->` 前缀报 invalid option，端口自愈链因此失效一轮。
+3. grep 多 pattern 用多个 `-e`，不用 BRE 的「\|」——中文行内容时「\|」会整段漏匹配，导致误判「文件未修改」（本次误报一次）。
+4. **统计进程/对象禁止按命令行关键词 grep 计数**：daemon 进程名统一（如 agent-browser-darwin），按 session 名 grep 恒为数 0（实际 2 个，本次误判「无残留」）；按「Google Chrome」计数把用户日常浏览器混进来（误报双实例）。用 `lsof -p <pid>` 看 fd/sock 归属，或 `pgrep -f 完整特征串`。
+5. **清理类操作禁止盲删「非当前/非自己的」对象**（曾按「除第一个外全关」清理 tab——若那些不是死残留而是活跃会话的 tab，就是事故重演）。先甄别归属，只删确属自己或确认已死的。
+6. 管道后 `$?` 是末命令的退出码；要真实退出码先落盘（`cmd > log` 后 `echo $?`）或用 PIPESTATUS。
+7. **消费第三方 CLI 的参数分隔/解析规则先实测再依赖**：README 写「comma or newline separated」，agent-browser 0.38.2 换行实测不生效、逗号硬拆——含逗号的值（如 Chrome `--window-position=x,y`）经此通道必然损坏，残尾数字被 Chrome 当整数 IP URL（即「0.0.3.32 tab」事件，0.0.3.32 = 整数 800）。产品侧细节见 `browser-automation-safety` skill。

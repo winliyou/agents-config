@@ -32,6 +32,8 @@ description: Docker 优先原则：服务运行、集成/E2E 测试、构建与�
 
 ## DOCKER_CONFIG 重定向（沙盒内用 docker 时）
 
+**2026-10-14 起 `~/.docker/buildx` 已由 sandbox-extra-roots 放行，沙盒内 `docker compose build` 可直接跑（含 registry 凭据的 `config.json` 有意不放写）；以下重定向规程保留给未配插件的机器。**
+
 沙盒下 `~/.docker/` 不可写时，用 `DOCKER_CONFIG=<可写目录>` 重定向。**必须整体复制，缺一不可**（2026-09-25 实测）：
 - `contexts/`、`cli-plugins/`、`config.json` 及其余 `*.json` 要一起过去；
 - 只复制 `buildx/`：不报错但**静默丢失当前 context**（回落到 `default`，可能连到错误的 daemon）；

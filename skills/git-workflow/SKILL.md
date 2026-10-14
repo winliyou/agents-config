@@ -112,8 +112,8 @@ done
 **推送后必须确认 CI 实际结果（2026-09-25 实测教训）**：
 
 - `git push` 成功 ≠ CI 通过。tag/分支推送后用 `gh run list --limit 3` 核对结论；
-  需要失败日志时 `XDG_CACHE_HOME=<workspace>/.workwork/cache gh run view <id> --log-failed`
-  （gh 的日志缓存默认写 `~/.cache/gh`，沙盒内不可写会直接报错）。
+  需要失败日志时直接 `gh run view <id> --log-failed`
+  （`~/.cache/gh` 已由 sandbox-extra-roots 放行，2026-10-14；未配插件的机器用旧 workaround：`XDG_CACHE_HOME=<workspace>/.workwork/cache` 前缀重定向——gh 的日志缓存默认写 `~/.cache/gh`）。
 - CI 长期红会被「上次也是红的」麻痹成常态：AnyDLNA 的 Linux CI 因
   `TestBundledToolDirFrom` 缺平台门控自 2026-09-20 起连挂 5 次（含纯文档提交）才被发现。
   看到连续失败必须先修再发，不许带红 tag 发布。

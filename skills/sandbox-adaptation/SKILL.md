@@ -9,9 +9,36 @@ description: 沙盒模式下工具报"路径不可写"时，把缓存/状态/套
 
 ### 核心原则
 
-沙盒模式下（macOS sandbox-exec、Linux bubblewrap、容器等）通常只有 workspace（及白名单、临时目录）可写，home 下大量路径不可写。**多数工具并非"不能在沙盒里跑"，只是默认把缓存/状态/套接字/临时目录放在 home 下**。遇到这类失败，默认动作是**把该工具的这些目录重定向到 workspace**，让它在沙盒内完整可用——而不是放弃功能、关闭沙盒、放宽权限或用等价命令绕开。
+沙盒模式下（macOS sandbox-exec、Linux bubblewrap、容器等）通常只有 workspace（及白名单、临时目录）可写，home 下大量路径不可写。**多数工具并非"不能在沙盒里跑"，只是默认把缓存/状态/套接字/临时目录放在 home 下**。遇到这类失败，默认动作是**先查下方「第零步」的插件放行清单：清单内的目录直接重跑命令，不在清单内才把该工具的这些目录重定向到 workspace**，让它在沙盒内完整可用——而不是放弃功能、关闭沙盒、放宽权限或用等价命令绕开。
 
 判断标准：**如果失败信息指向"某个路径不可写"，那是配置问题，不是能力缺失**。目标是恢复功能，同时保持沙盒隔离有效。
+
+### 第零步：先查插件放行清单（2026-10-14 起，本机 DSH 首选路径）
+
+本机 DSH 已配置 `@chaoset/sandbox-extra-roots` 插件（配置在
+`~/.dsh/profiles/web/cordis.patch.yml` 的 `extraWritableRoots`，改动**热生效**，无需重启）。
+以下目录在沙盒内**已可直接写入**，对应 EPERM **直接重跑原命令即可**，不要再做 workspace 重定向
+（下文各实战案例保留作历史排查记录，以及未配该插件的机器的参考）：
+
+| 已放行目录 | 覆盖的旧 workaround |
+|---|---|
+| `~/.npm`、`~/.bun/install/cache`、`~/Library/pnpm`、`~/Library/Caches/pnpm` | `npm_config_cache`、`BUN_INSTALL_CACHE_DIR`/`--cache-dir`、pnpm store 重定向 |
+| `~/Library/Caches/go-build`、`~/go` | `GOCACHE`/`GOMODCACHE`/`GOPATH`/`GOBIN` |
+| `~/.cargo`、`~/Library/Caches/com.apple.python`、`~/Library/Caches/pip`、`~/.cache/uv` | `CARGO_HOME`、`PYTHONPYCACHEPREFIX`、`PIP_CACHE_DIR`、`UV_CACHE_DIR` |
+| `~/.cache/gh` | `XDG_CACHE_HOME`（gh 日志缓存） |
+| `~/.android`、`~/.gradle`、`~/Library/Application Support/kotlin` | `ANDROID_USER_HOME`/fakehome、`GRADLE_USER_HOME`、`HOME` 整体重定向 |
+| `~/.hvigor`、`~/.ohpm`、`~/.Huawei/Emulator/deployed` | `HVIGOR_USER_HOME`（hvigor/ohpm 构建、DevEco 模拟器启动） |
+| `~/.docker/buildx` | `DOCKER_CONFIG` 整体重定向（含 registry 凭据的 `config.json` 有意不放写） |
+| `~/Library/Caches/ms-playwright` | playwright 浏览器下载缓存 |
+| `~/.agents`（2026-10-14 晚用户确认放行） | AI skill 沉淀（`~/.agents/skills/`）与工具包装器维护（`~/.agents/bin/`，如 agent-browser wrapper）；纯配置文件、无 daemon/socket，热生效实测 touch 探针约 3s 内放行 |
+
+- **清单里没有的路径**：仍按下方「配置面」重定向；若该目录值得长期放行，经用户确认后把绝对路径加进插件配置（DSH 设置页「插件配置 → 沙盒额外允许目录」，或直接改上述文件），并回填本表。
+- **插件管不了的两类**：①嵌套沙盒冲突（Chrome 等，见下文）；②「读」类失败——读本就不受限，插件只放写。
+- `~/.agent-browser` 有意**不**放行：wrapper 靠「默认目录不可写 → 硬失败」提示提权原生启动，放行反而让它在沙盒内误启动、Chrome 因嵌套沙盒起不来（见 `browser-automation-safety` skill）。
+- `~/.gradle` 若将来写入发布凭据（gradle.properties），须重新评估是否保留放行（2026-10-14 核实：本机当前无该文件）。
+- 本清单 2026-10-14 晚已逐项**实测真实写路径**：bun/pnpm(store+元数据)/pip/uv/系统 python
+  pycache/go build/go mod download/cargo fetch/gh run log/docker buildx/gradle 全部通过；
+  DevEco 模拟器放行后沙盒内直启约 10s 就绪（`~/.Huawei/Emulator/deployed` 实写 qcow2）。
 
 ### 第一步：先诊断，别急着改
 
@@ -43,7 +70,7 @@ description: 沙盒模式下工具报"路径不可写"时，把缓存/状态/套
 | 运行状态 / 套接字 / 进程间通信 | `XDG_RUNTIME_DIR`、工具自身的 `*_SOCKET_DIR`/`*_STATE_DIR` | workspace 下短路径目录（套接字路径有长度上限，目录名别太长） |
 | 配置 / 数据 / 日志 | `XDG_CONFIG_HOME`、`XDG_DATA_HOME`、`XDG_CACHE_HOME` | workspace 下对应子目录 |
 | 工具自有状态（无专用开关） | `HOME` 整体覆盖 | workspace 下专用目录 |
-| Git 访问 ~/.gitconfig 被拦截 | `GIT_CONFIG_GLOBAL=/dev/null`（临时）或指向 workspace 配置（搭配 `-c user.name/email`） | 消除沙盒对主目录 `.gitconfig` 读取触发的 EPERM |
+| Git 访问 ~/.gitconfig 被拦截 | `GIT_CONFIG_GLOBAL=/dev/null`（临时）或指向 workspace 配置（搭配 `-c user.name/email`） | 消除沙盒对主目录 `.gitconfig` 读取触发的 EPERM。**2026-10-14 实测：现行 workspace-write 下读 `~/.gitconfig` 正常（读本不受限），本条仅作历史记录** |
 | 子进程自带沙盒（嵌套冲突） | 由工具参数关闭内层沙盒（如 Chrome `--no-sandbox`、部分工具的 `--no-sandbox`/`--disable-sandbox`） | **属降低隔离等级，须用户明确同意**；见下方「嵌套沙盒冲突」与「降低子进程沙盒的判定规则」 |
 
 ### 嵌套沙盒冲突：先怀疑它，再考虑提权

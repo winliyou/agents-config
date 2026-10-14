@@ -19,10 +19,12 @@ description: 本机环境事实：macOS 路径、已装工具、凭据归档位�
 - Bun：已安装（`~/.bun/bin/bun`，官方安装脚本），前端默认包管理器。
 
 - gh CLI：`/opt/homebrew/bin/gh`（Homebrew 安装，2026-10-04 实测为 2.102.0，版本号会变、用时以 `gh --version` 为准），已登录 `winliyou`（git 协议 ssh）。
-  沙盒内使用注意：`gh run view` 的日志缓存写 `~/.cache/gh` 会 EPERM，先
+  沙盒内使用注意：`~/.cache/gh` 已由 sandbox-extra-roots 放行（2026-10-14），`gh run view`
+  的日志缓存可直接写；未配插件的机器先
   `export XDG_CACHE_HOME=<workspace>/.workwork/cache`（2026-09-25 实测）。
-- 沙盒内 `go install` 第三方 CLI（如 wails）：`GOPATH`/`GOBIN`/`GOCACHE`/`GOMODCACHE` 都要
-  重定向进 workspace——`GOPATH` 不重定向时 GOSUMDB 校验缓存写 `~/go/pkg/sumdb` 会 EPERM
+- 沙盒内 `go install` 第三方 CLI（如 wails）：`~/go`、`~/Library/Caches/go-build` 已由
+  sandbox-extra-roots 放行（2026-10-14），直接 `go install` 即可；未配插件的机器才需重定向——
+  `GOPATH` 不重定向时 GOSUMDB 校验缓存写 `~/go/pkg/sumdb` 会 EPERM
   （2026-09-25 实测：`GOBIN=$PWD/.workwork/bin GOPATH=$PWD/.workwork/gopath go install ...` 成功）。
 - **工具存在性检查禁止写在 `&&` 链尾**（2026-09-25 被纠正）：
   `git describe --tags && which gh || echo NO_GH` 这类写法，链上任一环失败都会短路到

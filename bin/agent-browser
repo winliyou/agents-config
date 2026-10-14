@@ -1,106 +1,255 @@
-#!/usr/bin/env bash
-# agent-browser 包装器（用户级，PATH 优先级高于 ~/.bun/bin）：
-#   1) 会话级 session 固化——一个 DSH 会话固定用一个 agent-browser session；
-#   2) 沙盒自适应——受限沙盒内重定向 socket/profile 到可写目录；
-#   3) Chrome 沙盒按环境自适应——**只有存在外层沙盒时才关 Chrome 内层沙盒**。
-#
-# 为什么要 session 固化：agent-browser 默认 session 名是 "default"（全局共享），
-# 每个不同的 --session 名 = 一个新 daemon + 一个新浏览器实例。若任务连用户日常
-# Chrome（--cdp/--auto-connect），每次新握手都会触发 Chrome「正在请求远程控制」
-# 弹窗。靠"每次记得写 --session"的纪律无法保证，故在此统一注入。
-#
-# 为什么需要沙盒自适应（2026-09-25 实测，workspace-write 模式下零提权跑通）：
-#   ① socket 目录 ~/.agent-browser 不可写 → daemon 起不来
-#      报错：Socket directory '/Users/liyou/.agent-browser' is not writable
-#   ② Chrome 启动失败：sandbox initialization failed: Operation not permitted
-#      （表层常表现为 "Failed to initialize sandbox" / "GPU process isn't usable"）
-#      根因：macOS Seatbelt 不支持嵌套——外层已有 sandbox-exec 时，Chrome 再调
-#      sandbox_init() 装自己的 profile 会被拒。**与目录无关**（已实测：重定向
-#      HOME/user-data-dir/crash-dumps-dir 均无效；且 macOS Chrome 用
-#      NSHomeDirectory() 定位，不读 HOME 变量）。
-#
-# 关于 Chrome 沙盒的取舍（本包装器的策略）：
-#   运行环境**已有**沙盒（如 DSH 的 workspace-write）→ 关掉 Chrome 内层沙盒
-#     （--no-sandbox）。此时隔离仍由外层沙盒提供，且不关会导致浏览器根本起不来。
-#   运行环境**没有**沙盒（用户手动在终端跑、或提权执行）→ **保持 Chrome 原生沙盒**，
-#     不注入任何参数，让浏览器拥有完整的两层防护。
-#   判定手段：探测「当前能否再创建一层 Seatbelt 沙盒」——
-#     sandbox-exec -p '(version 1)(allow default)' /usr/bin/true
-#     失败(Operation not permitted) ⇒ 已在沙盒内 ⇒ 需 --no-sandbox
-#     成功(exit 0)                 ⇒ 无外层沙盒 ⇒ 保留 Chrome 沙盒
-#
-# 规则：调用方显式指定的一律尊重，绝不覆盖（--session/--profile/--args 及其同名
-#       环境变量）；不在 DSH 会话内时保持上游默认行为。
-set -euo pipefail
+#!/usr/bin/env bun
+// agent-browser 包装器(TS 版;~/.local/bin 与 ~/.bun/bin 两个入口的 symlink 都指向本文件)
+//
+// 2026-10-15 凌晨自 bash 版重写(bash 版备份:.workwork/backup-agent-browser/agent-browser.bash.bak-20261015):
+// 参数一律数组 spawn 传递(无 shell 词法拆分),JSON 原生读写,消灭模板串/引号/多字节解析类问题。
+// 功能与 bash 版 1:1:
+//   0) close 硬闸:close(shared)与 close --all 拦截,逃生门 AGENT_BROWSER_ALLOW_CLOSE_SHARED=1;
+//   0.5) 宿主-房客:宿主 = shared + profiles/main 常驻;宿主在 → 新调用自动变房客
+//        (session 自动分配 dsh-<DSH_SESSION_ID 末8>/manual-<PPID>,注入 --cdp <端口> --pin-tab);
+//   1) 显式指定(--session/--profile/AGENT_BROWSER_SESSION/AGENT_BROWSER_GLOBAL_SESSION)一律优先;
+//   2) profile:宿主/房客 → profiles/main(登录态共享);显式独立 session → profiles/<名>;
+//   3) 有头静默:silent-launch(无窗口零打扰)+ AutomationControlled 清 webdriver;
+//      注:ARGS 经 agent-browser 按逗号硬拆,含逗号的值(如 --window-position=x,y)不可经此传递,
+//      残尾数字会被 Chrome 当整数 IP URL(http://0.0.3.32/ = 800,2026-10-15 实测);
+//   4) 空闲回收:仅宿主禁用(IDLE_TIMEOUT_MS=0);房客 daemon 1h 自退,下次按 targetId 重挂;
+//   5) 宿主状态异常(sock 在但端口不可发现/端口死)→ 全自动自愈:清 stale 状态、结束孤儿
+//      Chrome(严格按 user-data-dir 匹配)、重置 exit_type 防崩溃恢复、清失效房客,转宿主重启。
+// 排障:AGENT_BROWSER_WRAPPER_DEBUG=1 打印决策。
+// 详细规程与实测结论:~/.agents/skills/browser-automation-safety/SKILL.md
 
-REAL="$HOME/.bun/bin/agent-browser"
+import { statSync } from "node:fs";
+const sockExists = (p: string) => { try { return statSync(p).isSocket(); } catch { return false; } };
+const HOME = process.env.HOME ?? "";
+const REAL = HOME + "/.bun/install/global/node_modules/agent-browser/bin/agent-browser.js";
+const AB_HOME = process.env.AGENT_BROWSER_HOME ?? HOME + "/.agent-browser";
+const argv = process.argv.slice(2);
 
-# ---------- 解析调用方是否已显式指定 ----------
-has_session_flag=0
-has_profile_flag=0
-has_args_flag=0
-for arg in "$@"; do
-  case "$arg" in
-    --session|--session=*) has_session_flag=1 ;;
-    --profile|--profile=*) has_profile_flag=1 ;;
-    --args|--args=*)       has_args_flag=1 ;;
-  esac
-done
+const debug = (...m: unknown[]) => {
+  if (process.env.AGENT_BROWSER_WRAPPER_DEBUG === "1") console.error("[wrapper]", ...m);
+};
+const run = (cmd: string[]) => Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" });
 
-# ---------- 1) 会话级 session 固化 ----------
-if [ "$has_session_flag" -eq 0 ] && [ -z "${AGENT_BROWSER_SESSION:-}" ] && [ -n "${DSH_SESSION_ID:-}" ]; then
-  short="${DSH_SESSION_ID##*-}"          # 会话 id 末段，唯一且稳定
-  export AGENT_BROWSER_SESSION="dsh-${short:0:8}"
-fi
+// ---------- 显式指定解析 ----------
+let hasSessionFlag = false;
+let hasProfileFlag = false;
+for (const a of argv) {
+  if (a === "--session" || a.startsWith("--session=")) hasSessionFlag = true;
+  if (a === "--profile" || a.startsWith("--profile=")) hasProfileFlag = true;
+}
 
-# ---------- 2) 目录重定向（仅在默认 socket 目录真正不可写时） ----------
-# 注意：不能用 [ ! -d ] 判断——全新机器上 ~/.agent-browser 尚不存在但完全可建，
-# 那是正常环境，不是受限。唯一可靠判据是"实际写一次"。
-AB_HOME="${AGENT_BROWSER_HOME:-$HOME/.agent-browser}"
-sbx=""
-_AB_PROBE="$AB_HOME/.probe-$$"
-if mkdir -p "$AB_HOME" 2>/dev/null && touch "$_AB_PROBE" 2>/dev/null; then
-  rm -f "$_AB_PROBE"          # 可写 → 正常环境，不干预（保留上游默认落点）
-else
-  # 落点优先级：TMPDIR（会话内稳定、不污染项目）→ 当前目录 .workwork → /tmp
-  for cand in "${TMPDIR:-}" "${PWD:-}/.workwork" "/tmp"; do
-    [ -z "$cand" ] && continue
-    cand="${cand%/}/agent-browser-sandbox"
-    if mkdir -p "$cand/sock" "$cand/chrome-profile" 2>/dev/null; then sbx="$cand"; break; fi
-  done
+// ---------- 子命令 / --all / 生效 session 名解析 ----------
+const VALUE_FLAGS = new Set(["--session", "--profile", "--cdp", "--label", "--args", "--timeout", "--default-timeout", "--idle-timeout"]);
+let subcmd = "";
+let hasCloseAll = false;
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i] as string;
+  if (VALUE_FLAGS.has(a)) { i++; continue; } // 带独立值的 flag:跳过其值
+  if (!a.startsWith("-") && subcmd === "") subcmd = a;
+  if (a === "--all") hasCloseAll = true;
+}
+let effSession = "";
+if (hasSessionFlag) {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i] as string;
+    if (a === "--session") { effSession = (argv[i + 1] as string) ?? ""; break; }
+    if (a.startsWith("--session=")) { effSession = a.slice("--session=".length); break; }
+  }
+} else if (process.env.AGENT_BROWSER_SESSION) {
+  effSession = process.env.AGENT_BROWSER_SESSION;
+} else {
+  effSession = process.env.AGENT_BROWSER_GLOBAL_SESSION ?? "shared";
+}
 
-  if [ -n "$sbx" ]; then
-    # socket/状态目录（daemon 用）
-    if [ -z "${AGENT_BROWSER_SOCKET_DIR:-}" ]; then
-      export AGENT_BROWSER_SOCKET_DIR="$sbx/sock"
-    fi
-    # Chrome profile（避免写 ~/Library/Application Support 被拒）
-    if [ "$has_profile_flag" -eq 0 ] && [ -z "${AGENT_BROWSER_PROFILE:-}" ]; then
-      set -- --profile "$sbx/chrome-profile" "$@"
-    fi
-  fi
-fi
+// ---------- 0) close 硬闸 ----------
+if (subcmd === "close") {
+  const reason = hasCloseAll
+    ? "close --all 会关掉本机所有 agent-browser session(含其他正在工作的会话)"
+    : effSession === "shared"
+      ? "shared 是全机共享的宿主实例,关掉它会打断所有并发会话正在进行的浏览器任务"
+      : "";
+  if (reason && process.env.AGENT_BROWSER_ALLOW_CLOSE_SHARED !== "1") {
+    console.error(
+      [
+        "ERROR: 已拦截 close:" + reason + "。",
+        "  正确做法:并发会话自动成为独立房客(session 自动分配),无需也无法 close 宿主;",
+        "  跑批/隔离任务用 AGENT_BROWSER_GLOBAL_SESSION=<项目名> 换名开独立实例,",
+        "  用完执行 agent-browser --session <项目名> close 只关自己的。",
+        "  确需关闭宿主(先确认无其他会话在使用):AGENT_BROWSER_ALLOW_CLOSE_SHARED=1 agent-browser close",
+      ].join("\n"),
+    );
+    process.exit(1);
+  }
+}
 
-# ---------- 3) Chrome 沙盒：仅在"已有外层沙盒"时关闭内层 ----------
-# 只在真正会启动浏览器的调用上做探测，纯查询类命令不打扰。
-# 探测：能否再创建一层 Seatbelt 沙盒。失败 ⇒ 外层已有沙盒。
-if [ "$has_args_flag" -eq 0 ] && [ "${AGENT_BROWSER_CHROME_SANDBOX:-auto}" != "native" ]; then
-  nested_ok=1
-  if [ -x /usr/bin/sandbox-exec ]; then
-    if /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true >/dev/null 2>&1; then
-      nested_ok=1     # 无外层沙盒 → 保留 Chrome 原生沙盒
-    else
-      nested_ok=0     # 已在沙盒内 → Chrome 自身沙盒无法初始化，必须关闭
-    fi
-  fi
+// ---------- 孤儿 daemon 清理(2026-10-15 实测:多代 daemon 互相抢着重启 Chrome 的根源) ----------
+// sock 已不存在却仍存活的 daemon = 失控前代,其守护逻辑会不断重启 Chrome。连续两次检测均无
+// sock 才杀(避免误杀刚启动尚未绑 sock 的新 daemon)。
+const cleanOrphanDaemons = async () => {
+  const list = run(["pgrep", "-f", "agent-browser-darwin"]);
+  if (list.exitCode !== 0) return;
+  const pids = list.stdout.toString().split("\n").map((s) => s.trim()).filter(Boolean);
+  const suspects: string[] = [];
+  for (const pid of pids) {
+    const has = run(["lsof", "-p", pid]).stdout.toString().includes(".sock");
+    if (!has) suspects.push(pid);
+  }
+  if (suspects.length === 0) return;
+  await Bun.sleep(500);
+  for (const pid of suspects) {
+    const still = run(["lsof", "-p", pid]).stdout.toString().includes(".sock");
+    const alive = run(["kill", "-0", pid]).exitCode === 0;
+    if (alive && !still) run(["kill", pid]);
+  }
+  debug("清理了失控孤儿 daemon:" + suspects.join(","));
+};
 
-  if [ "$nested_ok" -eq 0 ]; then
-    if [ -n "${AGENT_BROWSER_ARGS:-}" ]; then
-      export AGENT_BROWSER_ARGS="${AGENT_BROWSER_ARGS},--no-sandbox"
-    else
-      export AGENT_BROWSER_ARGS="--no-sandbox"
-    fi
-  fi
-fi
+// 自愈用:确保 daemon 全部死透(SIGTERM 轮询 + SIGKILL 兜底)
+const killAllDaemons = () => {
+  for (let round = 0; round < 5; round++) {
+    if (run(["pgrep", "-f", "agent-browser-darwin"]).exitCode !== 0) return;
+    run(["pkill", "-f", "agent-browser-darwin"]);
+    Bun.sleepSync(400);
+  }
+  run(["pkill", "-9", "-f", "agent-browser-darwin"]);
+  Bun.sleepSync(300);
+};
 
-exec "$REAL" "$@"
+await cleanOrphanDaemons();
+
+// ---------- 0.5) 宿主-房客决策 ----------
+const explicit = hasSessionFlag || !!process.env.AGENT_BROWSER_SESSION || !!process.env.AGENT_BROWSER_GLOBAL_SESSION;
+const inject: string[] = [];
+const injectEnv: Record<string, string> = {};
+let guest = false;
+
+// 房客(attach)模型默认关闭:agent-browser 0.38.2 的 --cdp attach 存在结构性 bug——
+// 房客 daemon 启动/执行会杀死同 profile 的宿主 Chrome(attach 活端口仍 Connection refused,
+// 2026-10-15 凌晨受控实验实锤,阶段2 三轮全部复现)。默认全部走 shared 单例(稳定);
+// 需要实验性启用时设 AGENT_BROWSER_GUEST_MODE=1。
+if (!explicit && process.env.AGENT_BROWSER_GUEST_MODE === "1" && sockExists(AB_HOME + "/shared.sock")) {
+  // 端口发现 ①:DevToolsActivePort;② 兜底:宿主 daemon 的 ESTABLISHED 对端端口(数组 spawn,无解析歧义)
+  let port = "";
+  const pfPath = AB_HOME + "/profiles/main/DevToolsActivePort";
+  const pf = Bun.file(pfPath);
+  if (await pf.exists()) port = (await pf.text()).split("\n")[0]?.trim() ?? "";
+  if (!port) {
+    let hp = "";
+    try { hp = (await Bun.file(AB_HOME + "/shared.pid").text()).trim(); } catch {}
+    if (hp) {
+      const out = run(["lsof", "-p", hp, "-a", "-iTCP", "-nP"]).stdout.toString();
+      port = out.match(/->[\d.]+:(\d+)/)?.[1] ?? "";
+    }
+  }
+  // 端口活性探测:死端口视为宿主已死,转自愈(否则房客连死端口反复失败)
+  if (port && run(["lsof", "-iTCP:" + port, "-sTCP:LISTEN", "-nP"]).exitCode !== 0) {
+    debug("端口 " + port + " 无监听,宿主 Chrome 已死,转自愈");
+    port = "";
+  }
+
+  if (!port) {
+    // ---- 自愈:宿主状态异常 ----
+    let hp = "";
+    try { hp = (await Bun.file(AB_HOME + "/shared.pid").text()).trim(); } catch {}
+    const alive = !!hp && run(["kill", "-0", hp]).exitCode === 0;
+    if (alive) {
+      run(["kill", hp]);
+      debug("宿主 daemon " + hp + " 存活但无浏览器连接(状态异常),已结束");
+    } else {
+      debug("宿主 daemon 已死,仅剩 stale sock");
+    }
+    const rm = (p: string) => { try { require("node:fs").unlinkSync(p); } catch {} };
+    rm(AB_HOME + "/shared.sock");
+    rm(AB_HOME + "/shared.pid");
+    // 孤儿 Chrome:严格按 user-data-dir 匹配,绝不碰日常 Chrome
+    if (run(["pgrep", "-f", "agent-browser/profiles/main"]).exitCode === 0) {
+      run(["pkill", "-f", "user-data-dir=" + AB_HOME + "/profiles/main"]);
+      await Bun.sleep(1000);
+      for (const f of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) rm(AB_HOME + "/profiles/main/" + f);
+      debug("已结束孤儿 Chrome 并清理 Singleton 锁");
+    }
+    // exit_type 重置:防 Chrome 崩溃恢复把历史垃圾 tab 带回用户屏幕(0.0.3.32 事件教训之一)
+    try {
+      const prefsPath = AB_HOME + "/profiles/main/Default/Preferences";
+      const prefs = (await Bun.file(prefsPath).json()) as { profile?: Record<string, unknown> };
+      prefs.profile = { ...(prefs.profile ?? {}), exit_type: "Normal", exited_cleanly: true };
+      await Bun.write(prefsPath, JSON.stringify(prefs));
+    } catch {}
+    // 旧 Chrome 已换血:失效的房客 daemon 与绑定一并清掉,下次命令全新重挂
+    killAllDaemons();
+    try {
+      const fs = require("node:fs");
+      for (const f of fs.readdirSync(AB_HOME)) {
+        if (/^(dsh|manual)-.*\.(sock|pid|target|config|stream|version)$/.test(f)) rm(AB_HOME + "/" + f);
+      }
+    } catch {}
+    debug("自愈完成,本次调用转为宿主重启");
+  } else {
+    // ---- 房客模式 ----
+    const dsh = process.env.DSH_SESSION_ID ?? "";
+    const name = dsh ? "dsh-" + dsh.slice(-8) : "manual-" + String((process.ppid ?? 0) % 1_000_000).padStart(6, "0");
+    injectEnv.AGENT_BROWSER_SESSION = name;
+    inject.push("--cdp", port, "--pin-tab");
+    guest = true;
+    debug("房客模式:session=" + name + " cdp=" + port + " pin-tab=on");
+  }
+}
+
+// ---------- 1) 宿主 session ----------
+if (!hasSessionFlag && !process.env.AGENT_BROWSER_SESSION) {
+  injectEnv.AGENT_BROWSER_SESSION = process.env.AGENT_BROWSER_GLOBAL_SESSION ?? "shared";
+}
+
+// ---------- 2) profile:宿主/房客 → main;显式独立 session → 同名独立 profile ----------
+if (!hasProfileFlag && !process.env.AGENT_BROWSER_PROFILE && !guest) {
+  // 房客(attach 模式)不注入 profile:登录态在宿主 Chrome 内,本地 profile 仅是 spawn 参数;
+  // 带上它会让房客 daemon 的 respawn 按 profile 抢占宿主 Chrome(2026-10-15 实测)。
+  const prof = effSession && effSession !== "shared"
+    ? AB_HOME + "/profiles/" + effSession
+    : AB_HOME + "/profiles/main";
+  inject.push("--profile", prof);
+}
+
+// ---------- 3) 有头静默:silent-launch(无窗口零打扰,UA 正常) ----------
+if (!process.env.AGENT_BROWSER_HEADED) injectEnv.AGENT_BROWSER_HEADED = "1";
+if (!process.env.AGENT_BROWSER_ARGS) {
+  // AutomationControlled 清 navigator.webdriver(CDP 启动的 Chrome 即使 headed 也置 true)。
+  // 值内不含逗号;含逗号的 Chrome 参数(--window-position=x,y)不可经 ARGS 传递(见文件头注释)。
+  injectEnv.AGENT_BROWSER_ARGS = "--disable-blink-features=AutomationControlled,--silent-launch";
+}
+
+// ---------- 3.2) 宿主也钉 tab(防房客开新 tab 挪走宿主活动 tab;对在跑 daemon 补发即 sticky) ----------
+if (!guest && !explicit && !argv.some((a) => a === "--pin-tab" || a === "--no-pin-tab")) {
+  inject.push("--pin-tab");
+}
+
+// ---------- 3.5) 空闲回收:仅宿主禁用 ----------
+if (!guest) {
+  const hasIdle = argv.some((a) => a === "--idle-timeout" || a.startsWith("--idle-timeout="));
+  if (!hasIdle && !process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS) injectEnv.AGENT_BROWSER_IDLE_TIMEOUT_MS = "0";
+}
+
+// ---------- 4) 状态目录可写探测(沙盒内不可写即提示提权;~/.agent-browser 有意不放行) ----------
+const probe = AB_HOME + "/.probe-" + process.pid;
+try {
+  await Bun.write(probe, "");
+  const fs = require("node:fs");
+  fs.unlinkSync(probe);
+} catch {
+  console.error(
+    [
+      "ERROR: " + AB_HOME + " 不可写(受限沙盒禁止写 home)。按本机约定,请对会启动浏览器的",
+      "agent-browser 调用申请提权(danger-full-access)执行:既保住 Chrome 原生沙盒,",
+      "又让全机共享同一 daemon 落点。",
+    ].join("\n"),
+  );
+  process.exit(1);
+}
+
+const finalSession = injectEnv.AGENT_BROWSER_SESSION ?? process.env.AGENT_BROWSER_SESSION ?? "";
+debug("最终执行:session=" + finalSession + " args=" + JSON.stringify([...inject, ...argv]));
+const proc = Bun.spawnSync([REAL, ...inject, ...argv], {
+  env: { ...process.env, ...injectEnv },
+  stdio: ["inherit", "inherit", "inherit"],
+});
+process.exit(proc.exitCode ?? 0);

@@ -7,10 +7,13 @@ description: 下载依赖、访问被墙站点、配置镜像源与代理的规�
 
 涉及网络下载与镜像/代理选择时加载。优先级：国内镜像源 → 本地 xray 代理 → 停止并说明。
 
-访问可能被墙的网站（网页、文档、API、CDN 等）时直接走本地 xray 代理；开发类依赖下载/代码拉取的优先级：国内镜像源 → 本地 xray 代理 → 停止并说明。以下镜像与代理均于 2026-09 实测可用，若失效先重新探活再换方案。
+访问可能被墙的网站（网页、文档、API、CDN 等）时直接走本地 xray 代理；开发类依赖下载/代码拉取的优先级：国内镜像源 → 本地 xray 代理 → 停止并说明（**npm/pnpm/bun 例外：默认官方源，见下条**）。以下镜像与代理均于 2026-09 实测可用，若失效先重新探活再换方案。
 
 - 优先镜像源：有国内镜像的工具直接在项目/工具配置中固定镜像，不走代理：
-  - npm/pnpm：项目 `.npmrc` 写 `registry=https://registry.npmmirror.com`（本机 `~/.npmrc` 已全局配好该 registry，项目无需重复）；bun：项目 `bunfig.toml` 写 `[install]` 节 + `registry = "https://registry.npmmirror.com"`（2026-09-21 实测生效，bun.lock 的 resolved URL 走镜像；本机仅 ops-portal/ui 有 bunfig.toml，其余靠全局 ~/.npmrc）。
+  - npm/pnpm/bun：**默认一律 npmjs 官方源，禁止把镜像写进配置文件**（2026-10-14 用户定策，全机五仓库落地并实测）：
+    - 配置文件零 registry：`~/.npmrc`、项目 `.npmrc`、`bunfig.toml`、`.yarnrc*`、环境变量、CI/Dockerfile **一律不写 registry**。本机全局配置均不存在，`npm/pnpm config get registry` 实测均为官方 `https://registry.npmjs.org/`。
+    - 仅当官方源**确认不可用**时，才用命令行参数**临时**走 npmmirror，用完即弃：`npm/pnpm <cmd> --registry https://registry.npmmirror.com`、`bun install --registry https://registry.npmmirror.com`。坚决杜绝写回任何配置文件（用户红线，覆盖本 skill 旧的全局镜像策略）。
+    - lockfile 会烙死下载 URL 绕过 registry 默认值：删掉 registry 配置后 lockfile 里仍可能残留 npmmirror URL。迁移方法：**域名替换** `registry.npmmirror.com` → `registry.npmjs.org`（镜像 tarball 与官方字节一致，integrity 不变、版本零漂移），再 `npm ci` / `pnpm|bun install --frozen-lockfile` 实装校验（2026-10-14 实测 CNM/fft_cover/hotspot/m3u8_player/ops-portal 五仓库全部通过，删除 lockfile 重装会引入依赖漂移，禁用）。
   - Go：**本机尚未配置**（`go env GOPROXY` 当前是官方 `https://proxy.golang.org,direct`）。需要时按需设 `GOPROXY=https://goproxy.cn,direct`，不要以为已生效。
   - Rust：**本机未配置 crates.io 镜像**（`~/.cargo/config.toml` 不存在）；但 `~/.zshrc` 已把 `RUSTUP_DIST_SERVER` / `RUSTUP_UPDATE_ROOT` 指向清华 TUNA，装 toolchain 走镜像。
   - pip：`-i https://pypi.tuna.tsinghua.edu.cn/simple`

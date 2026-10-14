@@ -15,9 +15,9 @@ description: HarmonyOS / 鸿蒙真机与模拟器调试通用流程（hdc）：�
 - 模拟器：`/Applications/DevEco-Studio.app/Contents/tools/emulator/Emulator -list|-start <name>|-stop <name>`
 - 构建/安装脚本按项目约定（如 music_app 用仓库根 `tools/auto_sign.sh`，不带参数只构建，`install` 构建+安装+启动）
 
-## 沙盒下构建必须先重定向缓存
+## 沙盒下构建
 
-不重定向会报 `EPERM ~/.hvigor` / `~/.npm`：
+**2026-10-14 起 `~/.hvigor`、`~/.ohpm`、`~/.npm` 已由 sandbox-extra-roots 放行，沙盒内直接构建即可**。未配插件的机器不重定向会报 `EPERM ~/.hvigor` / `~/.npm`：
 
 ```bash
 HVIGOR_USER_HOME=$PWD/.workwork/hvigor-home \
