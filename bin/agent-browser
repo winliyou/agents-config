@@ -36,7 +36,8 @@
 //      跑批/独立实例的逃生门(自带独立 profile,不受房客逻辑影响);
 //   2) profile:owner → profiles/main(登录态共享);房客不注入(登录态在 owner Chrome 内);
 //      显式独立 session → profiles/名;
-//   3) 有头静默:silent-launch(无窗口零打扰)+ AutomationControlled 清 webdriver;
+//   3) 静默运行:默认 headless(唯一不抢前台焦点的模式),AutomationControlled 清 webdriver,
+//      并用官方 AGENT_BROWSER_USER_AGENT 覆盖为正常 Chrome UA(消 HeadlessChrome 指纹);
 //      注:ARGS 经 agent-browser 按逗号硬拆,含逗号的值(如 --window-position=x,y)不可经此传递,
 //      残尾数字会被 Chrome 当整数 IP URL(http://0.0.3.32/ = 800,2026-10-15 实测);
 //   4) 空闲回收:仅非房客禁用(IDLE_TIMEOUT_MS=0);房客 daemon 1h 自退,下次按 targetId 重挂;
@@ -151,14 +152,30 @@ const purgeDeadSessionState = () => {
 };
 purgeDeadSessionState();
 
-// ---------- 有头静默(先算好:owner 冷启动与正式执行共用) ----------
+// ---------- 静默运行:不抢焦点(先算好:owner 冷启动与正式执行共用) ----------
+// 2026-10-15 实测结论(独立实例受控对照,前台应用用 lsappinfo front 判定):
+//   · headed:浏览器一启动就抢走前台焦点,用户"干啥都会被切到自动化窗口";把窗口移到屏幕外
+//     (--window-position=-32000,-32000)、--start-minimized、或启动后用 CDP
+//     Browser.setWindowBounds 搬走窗口,全都**不能**避免 —— 焦点已在启动瞬间丢失。
+//   · headless:前台 ASN 全程不变,tab new / open / eval / screenshot 全流程零打扰。
+//   故**默认必须 headless**。早期"有头静默"路线(--silent-launch)是错的:
+//   --silent-launch **不是** agent-browser/Chrome 的有效参数(grep 二进制 0 命中),被静默忽略,
+//   窗口照常出现并抢焦点。
+// headless 的两个副作用都有官方开关可解(均已实测):
+//   · UA 变 HeadlessChrome → 用官方 --user-agent / AGENT_BROWSER_USER_AGENT 覆盖为正常 Chrome UA;
+//   · navigator.webdriver=true → --disable-blink-features=AutomationControlled 仍有效(false)。
 const inject: string[] = [];
 const injectEnv: Record<string, string> = {};
-if (!process.env.AGENT_BROWSER_HEADED) injectEnv.AGENT_BROWSER_HEADED = "1";
 if (!process.env.AGENT_BROWSER_ARGS) {
-  // AutomationControlled 清 navigator.webdriver(CDP 启动的 Chrome 即使 headed 也置 true)。
-  // 值内不含逗号;含逗号的 Chrome 参数(--window-position=x,y)不可经 ARGS 传递(见文件头注释)。
-  injectEnv.AGENT_BROWSER_ARGS = "--disable-blink-features=AutomationControlled,--silent-launch";
+  // 值内不含逗号;含逗号的 Chrome 参数(--window-position=x,y)不可经 ARGS 传递(ARGS 按逗号硬拆)。
+  injectEnv.AGENT_BROWSER_ARGS = "--disable-blink-features=AutomationControlled";
+}
+// 不注入 AGENT_BROWSER_HEADED:默认走 agent-browser 的 headless(唯一不抢焦点的模式)。
+// 需要真窗口(如人工要看画面)时由调用方显式 AGENT_BROWSER_HEADED=1 或 --headed —— 后果自负:会抢焦点。
+if (!process.env.AGENT_BROWSER_USER_AGENT) {
+  // 消除 HeadlessChrome 指纹:与真实 Chrome 155 一致的 UA(从本机 Chrome 版本派生,勿凭记忆写死)。
+  injectEnv.AGENT_BROWSER_USER_AGENT =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36";
 }
 const childEnv = () => ({ ...process.env, ...injectEnv });
 
