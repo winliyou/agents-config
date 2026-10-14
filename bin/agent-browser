@@ -1,34 +1,65 @@
 #!/usr/bin/env bun
 // agent-browser 包装器(TS 版;~/.local/bin 与 ~/.bun/bin 两个入口的 symlink 都指向本文件)
 //
-// 2026-10-15 凌晨自 bash 版重写(bash 版备份:.workwork/backup-agent-browser/agent-browser.bash.bak-20261015):
+// 2026-10-15 凌晨自 bash 版重写(bash 版备份:.workwork/backup-agent-browser/)。
 // 参数一律数组 spawn 传递(无 shell 词法拆分),JSON 原生读写,消灭模板串/引号/多字节解析类问题。
-// 功能与 bash 版 1:1:
-//   0) close 硬闸:close(shared)与 close --all 拦截,逃生门 AGENT_BROWSER_ALLOW_CLOSE_SHARED=1;
-//   0.5) 宿主-房客:宿主 = shared + profiles/main 常驻;宿主在 → 新调用自动变房客
-//        (session 自动分配 dsh-<DSH_SESSION_ID 末8>/manual-<PPID>,注入 --cdp <端口> --pin-tab);
-//   1) 显式指定(--session/--profile/AGENT_BROWSER_SESSION/AGENT_BROWSER_GLOBAL_SESSION)一律优先;
-//   2) profile:宿主/房客 → profiles/main(登录态共享);显式独立 session → profiles/<名>;
+//
+// 2026-10-15 会话隔离修复(本版核心变更):让"跨会话/跨进程可连接"与"会话间互不影响"同时成立。
+//
+//   修复前:所有未显式指定 --session 的调用都坍缩到 shared 单例 + 单一 pinned tab —— 实测
+//   会话 A 开 example.com、会话 B 开 example.net 后,A 再读自己的页面拿到的是 example.net。
+//
+//   三个根因(前两个在本文件,第三个是上游语义):
+//     ① 房客(attach)门禁默认关闭,无显式指定时一律走宿主单例;
+//     ② 第 1) 段用"未显式指定就设 shared"覆盖了房客刚分配好的 session 名,使带 --cdp 的命令
+//        实际以 session=shared 发出 —— 这才是历史上"房客执行会杀死宿主 Chrome"的真因
+//        (shared 会话带 --cdp 指向自己的端口 → 宿主 daemon 连自己 → 重启自己);
+//     ③ 上游 0.34.0 起提供 --pin-tab 持久绑定,但浏览器 owner session 自身(即启动 Chrome
+//        的那个 session)不享受该保护:它的活动 tab 仍跟随全局活动 tab,房客一 open 新 tab,
+//        owner 再 eval 就读到房客的页面(shared.target 文件没变,eval 结果已漂移 —— 受控实测)。
+//
+//   修复方案(适配上游语义,而非对抗它):
+//     · shared session 降级为纯浏览器 owner —— 只负责持有 Chrome,永不承载用户命令;
+//     · 每个 DSH 会话一律以 pinned 房客身份运行:独立 session 名 + --cdp owner端口 +
+//       --pin-tab,且每一次调用都重复注入(--cdp 不是 sticky,漏传一次就掉回 owner 并顶掉别人);
+//     · 冷启动时先拉起 owner 浏览器,再用房客身份执行本次命令 —— 否则本次 open 会落在 owner 上,
+//       下一次调用变成房客时看不到该页面(首次调用结果丢失)。
+//
+//   实测(owner + 3 房客 × 3~5 轮交错 open/eval):
+//     · 房客之间 5/5 稳定,每会话恒定看到自己的页面;localStorage 互不串(跨进程验证);
+//     · owner Chrome 全程存活(daemon pid 不变),不再出现"房客杀死宿主"。
+//
+// 功能清单:
+//   0) close 硬闸:仅拦显式 shared 与 --all(owner 不能被误关);房客 close 放行;
+//   0.5) 宿主-房客:shared = owner(profiles/main 常驻);每个 DSH 会话 = 独立 pinned 房客;
+//   1) 显式指定(--session/--profile/AGENT_BROWSER_SESSION/AGENT_BROWSER_GLOBAL_SESSION)一律优先 ——
+//      跑批/独立实例的逃生门(自带独立 profile,不受房客逻辑影响);
+//   2) profile:owner → profiles/main(登录态共享);房客不注入(登录态在 owner Chrome 内);
+//      显式独立 session → profiles/名;
 //   3) 有头静默:silent-launch(无窗口零打扰)+ AutomationControlled 清 webdriver;
 //      注:ARGS 经 agent-browser 按逗号硬拆,含逗号的值(如 --window-position=x,y)不可经此传递,
 //      残尾数字会被 Chrome 当整数 IP URL(http://0.0.3.32/ = 800,2026-10-15 实测);
-//   4) 空闲回收:仅宿主禁用(IDLE_TIMEOUT_MS=0);房客 daemon 1h 自退,下次按 targetId 重挂;
-//   5) 宿主状态异常(sock 在但端口不可发现/端口死)→ 全自动自愈:清 stale 状态、结束孤儿
-//      Chrome(严格按 user-data-dir 匹配)、重置 exit_type 防崩溃恢复、清失效房客,转宿主重启。
+//   4) 空闲回收:仅非房客禁用(IDLE_TIMEOUT_MS=0);房客 daemon 1h 自退,下次按 targetId 重挂;
+//   5) owner 状态异常(sock 在但端口不可发现/端口死)→ 自愈:清 stale 状态、结束孤儿 Chrome
+//      (严格按 user-data-dir 匹配)、重置 exit_type 防崩溃恢复、清失效房客,再重新拉起 owner。
 // 排障:AGENT_BROWSER_WRAPPER_DEBUG=1 打印决策。
+// 回退旧的 shared 单例行为:AGENT_BROWSER_GUEST_MODE=0
 // 详细规程与实测结论:~/.agents/skills/browser-automation-safety/SKILL.md
 
 import { statSync } from "node:fs";
+import { createHash } from "node:crypto";
 const sockExists = (p: string) => { try { return statSync(p).isSocket(); } catch { return false; } };
 const HOME = process.env.HOME ?? "";
 const REAL = HOME + "/.bun/install/global/node_modules/agent-browser/bin/agent-browser.js";
 const AB_HOME = process.env.AGENT_BROWSER_HOME ?? HOME + "/.agent-browser";
+const OWNER_PROFILE = AB_HOME + "/profiles/main";
 const argv = process.argv.slice(2);
 
 const debug = (...m: unknown[]) => {
   if (process.env.AGENT_BROWSER_WRAPPER_DEBUG === "1") console.error("[wrapper]", ...m);
 };
 const run = (cmd: string[]) => Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe" });
+const rmFile = (p: string) => { try { require("node:fs").unlinkSync(p); } catch {} };
 
 // ---------- 显式指定解析 ----------
 let hasSessionFlag = false;
@@ -59,27 +90,6 @@ if (hasSessionFlag) {
   effSession = process.env.AGENT_BROWSER_SESSION;
 } else {
   effSession = process.env.AGENT_BROWSER_GLOBAL_SESSION ?? "shared";
-}
-
-// ---------- 0) close 硬闸 ----------
-if (subcmd === "close") {
-  const reason = hasCloseAll
-    ? "close --all 会关掉本机所有 agent-browser session(含其他正在工作的会话)"
-    : effSession === "shared"
-      ? "shared 是全机共享的宿主实例,关掉它会打断所有并发会话正在进行的浏览器任务"
-      : "";
-  if (reason && process.env.AGENT_BROWSER_ALLOW_CLOSE_SHARED !== "1") {
-    console.error(
-      [
-        "ERROR: 已拦截 close:" + reason + "。",
-        "  正确做法:并发会话自动成为独立房客(session 自动分配),无需也无法 close 宿主;",
-        "  跑批/隔离任务用 AGENT_BROWSER_GLOBAL_SESSION=<项目名> 换名开独立实例,",
-        "  用完执行 agent-browser --session <项目名> close 只关自己的。",
-        "  确需关闭宿主(先确认无其他会话在使用):AGENT_BROWSER_ALLOW_CLOSE_SHARED=1 agent-browser close",
-      ].join("\n"),
-    );
-    process.exit(1);
-  }
 }
 
 // ---------- 孤儿 daemon 清理(2026-10-15 实测:多代 daemon 互相抢着重启 Chrome 的根源) ----------
@@ -117,22 +127,28 @@ const killAllDaemons = () => {
 
 await cleanOrphanDaemons();
 
-// ---------- 0.5) 宿主-房客决策 ----------
-const explicit = hasSessionFlag || !!process.env.AGENT_BROWSER_SESSION || !!process.env.AGENT_BROWSER_GLOBAL_SESSION;
+// ---------- 有头静默(先算好:owner 冷启动与正式执行共用) ----------
 const inject: string[] = [];
 const injectEnv: Record<string, string> = {};
-let guest = false;
+if (!process.env.AGENT_BROWSER_HEADED) injectEnv.AGENT_BROWSER_HEADED = "1";
+if (!process.env.AGENT_BROWSER_ARGS) {
+  // AutomationControlled 清 navigator.webdriver(CDP 启动的 Chrome 即使 headed 也置 true)。
+  // 值内不含逗号;含逗号的 Chrome 参数(--window-position=x,y)不可经 ARGS 传递(见文件头注释)。
+  injectEnv.AGENT_BROWSER_ARGS = "--disable-blink-features=AutomationControlled,--silent-launch";
+}
+const childEnv = () => ({ ...process.env, ...injectEnv });
 
-// 房客(attach)模型默认关闭:agent-browser 0.38.2 的 --cdp attach 存在结构性 bug——
-// 房客 daemon 启动/执行会杀死同 profile 的宿主 Chrome(attach 活端口仍 Connection refused,
-// 2026-10-15 凌晨受控实验实锤,阶段2 三轮全部复现)。默认全部走 shared 单例(稳定);
-// 需要实验性启用时设 AGENT_BROWSER_GUEST_MODE=1。
-if (!explicit && process.env.AGENT_BROWSER_GUEST_MODE === "1" && sockExists(AB_HOME + "/shared.sock")) {
-  // 端口发现 ①:DevToolsActivePort;② 兜底:宿主 daemon 的 ESTABLISHED 对端端口(数组 spawn,无解析歧义)
+// ---------- 0.5) 宿主(owner)-房客决策 ----------
+const explicit = hasSessionFlag || !!process.env.AGENT_BROWSER_SESSION || !!process.env.AGENT_BROWSER_GLOBAL_SESSION;
+let guest = false;
+let guestName = "";
+let guestPort = "";
+const guestEnabled = process.env.AGENT_BROWSER_GUEST_MODE !== "0";
+
+// 端口发现:① DevToolsActivePort;② 兜底 owner daemon 的 ESTABLISHED 对端端口(数组 spawn,无解析歧义)
+const discoverPort = async (): Promise<string> => {
   let port = "";
-  const pfPath = AB_HOME + "/profiles/main/DevToolsActivePort";
-  const pf = Bun.file(pfPath);
-  if (await pf.exists()) port = (await pf.text()).split("\n")[0]?.trim() ?? "";
+  try { port = (await Bun.file(OWNER_PROFILE + "/DevToolsActivePort").text()).split("\n")[0]?.trim() ?? ""; } catch {}
   if (!port) {
     let hp = "";
     try { hp = (await Bun.file(AB_HOME + "/shared.pid").text()).trim(); } catch {}
@@ -141,89 +157,162 @@ if (!explicit && process.env.AGENT_BROWSER_GUEST_MODE === "1" && sockExists(AB_H
       port = out.match(/->[\d.]+:(\d+)/)?.[1] ?? "";
     }
   }
-  // 端口活性探测:死端口视为宿主已死,转自愈(否则房客连死端口反复失败)
-  if (port && run(["lsof", "-iTCP:" + port, "-sTCP:LISTEN", "-nP"]).exitCode !== 0) {
-    debug("端口 " + port + " 无监听,宿主 Chrome 已死,转自愈");
-    port = "";
-  }
+  // 端口活性探测:死端口视为 owner Chrome 已死
+  if (port && run(["lsof", "-iTCP:" + port, "-sTCP:LISTEN", "-nP"]).exitCode !== 0) return "";
+  return port;
+};
 
-  if (!port) {
-    // ---- 自愈:宿主状态异常 ----
-    let hp = "";
-    try { hp = (await Bun.file(AB_HOME + "/shared.pid").text()).trim(); } catch {}
-    const alive = !!hp && run(["kill", "-0", hp]).exitCode === 0;
-    if (alive) {
-      run(["kill", hp]);
-      debug("宿主 daemon " + hp + " 存活但无浏览器连接(状态异常),已结束");
-    } else {
-      debug("宿主 daemon 已死,仅剩 stale sock");
+const waitForPort = async (timeoutMs = 20000): Promise<string> => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const p = await discoverPort();
+    if (p) return p;
+    if (Date.now() > deadline) return "";
+    await Bun.sleep(300);
+  }
+};
+
+// owner 状态异常时的自愈(仅在确有 stale 痕迹时调用,避免误伤其它会话的房客)
+const selfHealOwner = async () => {
+  let hp = "";
+  try { hp = (await Bun.file(AB_HOME + "/shared.pid").text()).trim(); } catch {}
+  const alive = !!hp && run(["kill", "-0", hp]).exitCode === 0;
+  if (alive) { run(["kill", hp]); debug("owner daemon " + hp + " 存活但无浏览器连接(状态异常),已结束"); }
+  else debug("owner daemon 已死,仅剩 stale sock");
+  rmFile(AB_HOME + "/shared.sock");
+  rmFile(AB_HOME + "/shared.pid");
+  // 孤儿 Chrome:严格按 user-data-dir 匹配,绝不碰日常 Chrome
+  if (run(["pgrep", "-f", "agent-browser/profiles/main"]).exitCode === 0) {
+    run(["pkill", "-f", "user-data-dir=" + OWNER_PROFILE]);
+    await Bun.sleep(1000);
+    for (const f of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) rmFile(OWNER_PROFILE + "/" + f);
+    debug("已结束孤儿 Chrome 并清理 Singleton 锁");
+  }
+  // exit_type 重置:防 Chrome 崩溃恢复把历史垃圾 tab 带回用户屏幕(0.0.3.32 事件教训之一)
+  try {
+    const prefsPath = OWNER_PROFILE + "/Default/Preferences";
+    const prefs = (await Bun.file(prefsPath).json()) as { profile?: Record<string, unknown> };
+    prefs.profile = { ...(prefs.profile ?? {}), exit_type: "Normal", exited_cleanly: true };
+    await Bun.write(prefsPath, JSON.stringify(prefs));
+  } catch {}
+  // 旧 Chrome 已换血:失效的房客 daemon 与绑定一并清掉,下次命令全新重挂
+  killAllDaemons();
+  purgeGuestState(false);
+  debug("自愈完成");
+};
+
+// 清掉失效的房客 daemon 与绑定(owner 换血后所有房客绑定都已失效,留着只会让下次命令报 tab_gone)
+const purgeGuestState = (killDaemons: boolean) => {
+  try {
+    const fs = require("node:fs");
+    for (const f of fs.readdirSync(AB_HOME)) {
+      if (/^(dsh|manual)-.*\.(sock|pid|target|config|stream|version)$/.test(f)) rmFile(AB_HOME + "/" + f);
     }
-    const rm = (p: string) => { try { require("node:fs").unlinkSync(p); } catch {} };
-    rm(AB_HOME + "/shared.sock");
-    rm(AB_HOME + "/shared.pid");
-    // 孤儿 Chrome:严格按 user-data-dir 匹配,绝不碰日常 Chrome
-    if (run(["pgrep", "-f", "agent-browser/profiles/main"]).exitCode === 0) {
-      run(["pkill", "-f", "user-data-dir=" + AB_HOME + "/profiles/main"]);
-      await Bun.sleep(1000);
-      for (const f of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) rm(AB_HOME + "/profiles/main/" + f);
-      debug("已结束孤儿 Chrome 并清理 Singleton 锁");
+  } catch {}
+  if (killDaemons) {
+    for (const pid of (run(["pgrep", "-f", "agent-browser-darwin"]).stdout.toString().split("\n").map((s) => s.trim()).filter(Boolean))) {
+      // 只杀房客 daemon(打开了 dsh-/manual- sock 的那个),绝不碰 owner
+      const l = run(["lsof", "-p", pid]).stdout.toString();
+      if (/[\/](dsh|manual)-[^\/]*\.sock/.test(l)) run(["kill", pid]);
     }
-    // exit_type 重置:防 Chrome 崩溃恢复把历史垃圾 tab 带回用户屏幕(0.0.3.32 事件教训之一)
-    try {
-      const prefsPath = AB_HOME + "/profiles/main/Default/Preferences";
-      const prefs = (await Bun.file(prefsPath).json()) as { profile?: Record<string, unknown> };
-      prefs.profile = { ...(prefs.profile ?? {}), exit_type: "Normal", exited_cleanly: true };
-      await Bun.write(prefsPath, JSON.stringify(prefs));
-    } catch {}
-    // 旧 Chrome 已换血:失效的房客 daemon 与绑定一并清掉,下次命令全新重挂
-    killAllDaemons();
-    try {
-      const fs = require("node:fs");
-      for (const f of fs.readdirSync(AB_HOME)) {
-        if (/^(dsh|manual)-.*\.(sock|pid|target|config|stream|version)$/.test(f)) rm(AB_HOME + "/" + f);
-      }
-    } catch {}
-    debug("自愈完成,本次调用转为宿主重启");
-  } else {
-    // ---- 房客模式 ----
+  }
+};
+
+// 冷启动:以 shared 身份拉起 owner 浏览器(此后 shared 只持有 Chrome,不承载用户命令)
+const bootstrapOwner = () => {
+  debug("冷启动:以 shared owner 启动 Chrome");
+  // owner 重新拉起 = 旧 Chrome 已消失,旧房客绑定全部作废,先清干净再起
+  purgeGuestState(true);
+  const bootEnv = childEnv();
+  if (!bootEnv.AGENT_BROWSER_IDLE_TIMEOUT_MS) bootEnv.AGENT_BROWSER_IDLE_TIMEOUT_MS = "0";
+  return Bun.spawnSync(
+    [REAL, "--session", "shared", "--profile", OWNER_PROFILE, "--pin-tab", "open", "about:blank"],
+    { env: bootEnv, stdout: "pipe", stderr: "pipe" },
+  );
+};
+
+if (explicit) {
+  // 显式指定一律优先:调用方全权(跑批/独立实例/逃生门),不套用房客逻辑
+  debug("显式指定 session,尊重调用方语义:session=" + effSession);
+} else if (!guestEnabled) {
+  injectEnv.AGENT_BROWSER_SESSION = "shared";
+  debug("AGENT_BROWSER_GUEST_MODE=0:回退 shared 单例(不保证会话隔离)");
+} else {
+  let port = await discoverPort();
+  const staleOwner = sockExists(AB_HOME + "/shared.sock") || (await Bun.file(AB_HOME + "/shared.pid").exists());
+  if (!port && staleOwner) await selfHealOwner();
+  if (!port) { bootstrapOwner(); port = await waitForPort(); }
+  if (port) {
+    // 会话名:对完整 DSH_SESSION_ID 取哈希前 8 位,而非"末 8 字符"。
+    // 实测教训:末 8 字符会碰撞(如 postheal-...aaaa 与 soakaaaa-...aaaa 都得到 dsh-0000aaaa),
+    // 两个不同会话共用一个 session → 绑定互相覆盖并报 tab_gone。哈希取 8 位六十四进制,冲突概率可忽略。
     const dsh = process.env.DSH_SESSION_ID ?? "";
-    const name = dsh ? "dsh-" + dsh.slice(-8) : "manual-" + String((process.ppid ?? 0) % 1_000_000).padStart(6, "0");
-    injectEnv.AGENT_BROWSER_SESSION = name;
+    guestName = dsh
+      ? "dsh-" + createHash("sha256").update(dsh).digest("hex").slice(0, 8)
+      : "manual-" + String((process.ppid ?? 0) % 1_000_000).padStart(6, "0");
+    guestPort = port;
+    injectEnv.AGENT_BROWSER_SESSION = guestName;
+    // --cdp 不是 sticky:漏传一次该 session 就掉回 owner 并顶掉别人页面,故每次调用都重复注入;
+    // --pin-tab 保证绑定稳定(无绑定时新开 tab,而非收养别人的)。
     inject.push("--cdp", port, "--pin-tab");
     guest = true;
-    debug("房客模式:session=" + name + " cdp=" + port + " pin-tab=on");
+    debug("房客模式:session=" + guestName + " cdp=" + port + " pin-tab=on");
+  } else {
+    injectEnv.AGENT_BROWSER_SESSION = "shared";
+    debug("未能发现/拉起 owner 端口,回退 shared 单例");
   }
 }
 
-// ---------- 1) 宿主 session ----------
-if (!hasSessionFlag && !process.env.AGENT_BROWSER_SESSION) {
-  injectEnv.AGENT_BROWSER_SESSION = process.env.AGENT_BROWSER_GLOBAL_SESSION ?? "shared";
+// ---------- 0) close 硬闸(仅拦显式 shared 与 --all;房客 close 只关自己,放行) ----------
+if (subcmd === "close") {
+  const isOwnerSession = guest ? false : (injectEnv.AGENT_BROWSER_SESSION ?? effSession) === "shared";
+  const reason = hasCloseAll
+    ? "close --all 会关掉本机所有 agent-browser session(含其他正在工作的会话)"
+    : isOwnerSession
+      ? "shared 是全机共享的浏览器 owner,关掉它会打断所有并发会话正在进行的浏览器任务"
+      : "";
+  if (reason && process.env.AGENT_BROWSER_ALLOW_CLOSE_SHARED !== "1") {
+    console.error(
+      [
+        "ERROR: 已拦截 close:" + reason + "。",
+        "  正确做法:直接 agent-browser close 只会关掉你自己会话的 tab 与 daemon(房客自清理),无需指定 session;",
+        "  跑批/隔离任务用 AGENT_BROWSER_GLOBAL_SESSION=<项目名> 换名开独立实例,",
+        "  用完执行 agent-browser --session <项目名> close 只关自己的。",
+        "  确需关闭 owner(先确认无其他会话在使用):AGENT_BROWSER_ALLOW_CLOSE_SHARED=1 agent-browser close",
+      ].join("\n"),
+    );
+    process.exit(1);
+  }
 }
 
-// ---------- 2) profile:宿主/房客 → main;显式独立 session → 同名独立 profile ----------
-if (!hasProfileFlag && !process.env.AGENT_BROWSER_PROFILE && !guest) {
-  // 房客(attach 模式)不注入 profile:登录态在宿主 Chrome 内,本地 profile 仅是 spawn 参数;
-  // 带上它会让房客 daemon 的 respawn 按 profile 抢占宿主 Chrome(2026-10-15 实测)。
-  const prof = effSession && effSession !== "shared"
-    ? AB_HOME + "/profiles/" + effSession
-    : AB_HOME + "/profiles/main";
+// ---------- 房客 close:先关掉自己在 owner Chrome 里的 pinned tab,再退自己的 daemon ----------
+// 实测:房客 close 只退 daemon,不会关掉它在 owner 里开的 tab → 标签泄漏(曾累积 5 个僵尸 tab)。
+if (subcmd === "close" && guest && !hasCloseAll) {
+  let tid = "";
+  try { tid = (JSON.parse(await Bun.file(AB_HOME + "/" + guestName + ".target").text()) as { targetId?: string }).targetId ?? ""; } catch {}
+  if (tid) {
+    run([REAL, "--session", guestName, "--cdp", guestPort, "--pin-tab", "tab", "close", tid]);
+    debug("房客 close:已关闭自己的 tab " + tid);
+  }
+}
+
+// ---------- 2) profile:owner → main;显式独立 session → 同名独立 profile;房客不注入 ----------
+if (!hasProfileFlag && !process.env.AGENT_BROWSER_PROFILE && !guest && !explicit) {
+  // 房客(attach 模式)不注入 profile:登录态在 owner Chrome 内,本地 profile 仅是 spawn 参数;
+  // 带上它会让房客 daemon 的 respawn 按 profile 抢占 owner Chrome(2026-10-15 实测)。
+  const prof = effSession && effSession !== "shared" ? AB_HOME + "/profiles/" + effSession : OWNER_PROFILE;
   inject.push("--profile", prof);
 }
 
-// ---------- 3) 有头静默:silent-launch(无窗口零打扰,UA 正常) ----------
-if (!process.env.AGENT_BROWSER_HEADED) injectEnv.AGENT_BROWSER_HEADED = "1";
-if (!process.env.AGENT_BROWSER_ARGS) {
-  // AutomationControlled 清 navigator.webdriver(CDP 启动的 Chrome 即使 headed 也置 true)。
-  // 值内不含逗号;含逗号的 Chrome 参数(--window-position=x,y)不可经 ARGS 传递(见文件头注释)。
-  injectEnv.AGENT_BROWSER_ARGS = "--disable-blink-features=AutomationControlled,--silent-launch";
-}
-
-// ---------- 3.2) 宿主也钉 tab(防房客开新 tab 挪走宿主活动 tab;对在跑 daemon 补发即 sticky) ----------
-if (!guest && !explicit && !argv.some((a) => a === "--pin-tab" || a === "--no-pin-tab")) {
+// ---------- 3.2) owner 必须钉 tab;显式非 shared 实例不强制(尊重调用方语义) ----------
+// 注意:即便钉了 tab,owner session 自身仍会跟随全局活动 tab(上游语义),故 owner 不承载用户命令
+// —— 真正保证隔离的是"每个 DSH 会话都是 pinned 房客"。
+const effectiveName = injectEnv.AGENT_BROWSER_SESSION ?? process.env.AGENT_BROWSER_SESSION ?? effSession;
+if (!guest && effectiveName === "shared" && !argv.some((a) => a === "--pin-tab" || a === "--no-pin-tab")) {
   inject.push("--pin-tab");
 }
 
-// ---------- 3.5) 空闲回收:仅宿主禁用 ----------
+// ---------- 3.5) 空闲回收:仅非房客禁用(房客 daemon 1h 自退,下次按 targetId 重挂) ----------
 if (!guest) {
   const hasIdle = argv.some((a) => a === "--idle-timeout" || a.startsWith("--idle-timeout="));
   if (!hasIdle && !process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS) injectEnv.AGENT_BROWSER_IDLE_TIMEOUT_MS = "0";
@@ -233,8 +322,7 @@ if (!guest) {
 const probe = AB_HOME + "/.probe-" + process.pid;
 try {
   await Bun.write(probe, "");
-  const fs = require("node:fs");
-  fs.unlinkSync(probe);
+  rmFile(probe);
 } catch {
   console.error(
     [
@@ -247,9 +335,6 @@ try {
 }
 
 const finalSession = injectEnv.AGENT_BROWSER_SESSION ?? process.env.AGENT_BROWSER_SESSION ?? "";
-debug("最终执行:session=" + finalSession + " args=" + JSON.stringify([...inject, ...argv]));
-const proc = Bun.spawnSync([REAL, ...inject, ...argv], {
-  env: { ...process.env, ...injectEnv },
-  stdio: ["inherit", "inherit", "inherit"],
-});
+debug("最终执行:session=" + finalSession + " guest=" + guest + " args=" + JSON.stringify([...inject, ...argv]));
+const proc = Bun.spawnSync([REAL, ...inject, ...argv], { env: childEnv(), stdio: ["inherit", "inherit", "inherit"] });
 process.exit(proc.exitCode ?? 0);
