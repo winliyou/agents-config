@@ -1,6 +1,6 @@
 ---
 name: browser-automation-safety
-description: 浏览器自动化安全约定与防弹窗红线（本机）：优先用 agent-browser；全机共用一个浏览器 owner + 每个会话独立房客（2026-10-15 起跨会话可连接且会话间互不影响，已由 wrapper 强制）；有头静默与去自动化痕迹（headed + 窗口屏幕外 + 清 webdriver，不弹前台即不打扰）；浏览器二进制选择、daemon/标签页复用、禁止反复新建连接、禁止抢焦点与强切标签、禁止连用户日常 Chrome。触发：用浏览器自动化前；Chrome「正在请求远程控制」弹窗、弹窗轰炸、反复弹窗、抢焦点、窗口乱跳、标签被切走、进程堆积；打开网页/截图/抓取数据/测试 web 应用/登录站点；Electron 自动化（VS Code、Slack、Discord、Figma、Notion）；Slack 消息；探索性测试、QA、找 bug；需要登录态持久或独立 profile；agent-browser 跑成 Chrome for Testing；怀疑 session 重复新建、daemon 被反复重启。
+description: 浏览器自动化安全约定与防弹窗红线（本机）：优先用 agent-browser；全机共用一个浏览器 owner + 每个会话独立房客（2026-10-15 起跨会话可连接且会话间互不影响，已由 wrapper 强制）；静默运行与去自动化痕迹（默认 headless 绝不抢焦点 + 清 webdriver + 官方 UA 覆盖消 HeadlessChrome）；浏览器二进制选择、daemon/标签页复用、禁止反复新建连接、禁止抢焦点与强切标签、禁止连用户日常 Chrome。触发：用浏览器自动化前；Chrome「正在请求远程控制」弹窗、弹窗轰炸、反复弹窗、抢焦点、窗口乱跳、标签被切走、进程堆积；打开网页/截图/抓取数据/测试 web 应用/登录站点；Electron 自动化（VS Code、Slack、Discord、Figma、Notion）；Slack 消息；探索性测试、QA、找 bug；需要登录态持久或独立 profile；agent-browser 跑成 Chrome for Testing；怀疑 session 重复新建、daemon 被反复重启。
 ---
 
 # 浏览器自动化安全（Browser Automation Safety）
@@ -70,7 +70,7 @@ wrapper 检测到即按 `.target` 里的 lastUrl 自动重绑并重试一次（�
 
 **早期误判记录（供追溯，勿再采信）**：曾把「房客 session 启动/执行会杀死宿主 Chrome」归因为 **agent-browser 0.38.2 的 `--cdp` attach 缺陷**。2026-10-15 定位真因：**wrapper 自己的 bug**——房客门禁默认关闭 + 第 1) 段无条件把 session 设回 `shared`，使带 `--cdp` 的命令以 `session=shared` 发出，owner 会话于是去连自己的端口并重启自己。上游 0.38.2→0.39.1 无任何相关修复条目（经 release notes 与 10-commit diff 核对），**升级 0.39.1 对本问题无帮助**。
 
-**「0.0.3.32 垃圾 tab」根因与修复（2026-10-15 凌晨实测，用户屏幕上出现过）**：见到 `http://0.0.3.32/` 这类 0.0.x.x 的 tab，先按「**数字被 Chrome 当整数 IP 解析**」排查（0.0.3.32 = 整数 800，反查：`python3 -c "import ipaddress; print(ipaddress.ip_address(800))"`），不要先怀疑会话恢复。本次真因：wrapper 的 `AGENT_BROWSER_ARGS` 用逗号分隔多个参数，而 `--window-position=-32000,-32000` / `--window-size=1280,800` 的**值本身含逗号**——agent-browser 对 ARGS 按逗号硬拆（README Options 表宣称「comma or newline separated」，0.38.2 换行实测**不生效**），拆出的孤立项（如 `800`）被 Chrome 当位置参数 = 启动 URL → 整数 IP。**每次启动 Chrome 必现一个**，与恢复无关。修复：ARGS 只留无逗号参数，窗口方案改 `--silent-launch`（Chrome 正常有头进程但无窗口，零打扰，UA 正常、webdriver=false、CDP 自动化全部正常，实测通过）——比「屏幕外窗口」更干净。**教训：ARGS 机制传不了含逗号的值；含逗号的 Chrome 参数在此工具上不可用。**
+**「0.0.3.32 垃圾 tab」根因与修复（2026-10-15 凌晨实测，用户屏幕上出现过）**：见到 `http://0.0.3.32/` 这类 0.0.x.x 的 tab，先按「**数字被 Chrome 当整数 IP 解析**」排查（0.0.3.32 = 整数 800，反查：`python3 -c "import ipaddress; print(ipaddress.ip_address(800))"`），不要先怀疑会话恢复。本次真因：wrapper 的 `AGENT_BROWSER_ARGS` 用逗号分隔多个参数，而 `--window-position=-32000,-32000` / `--window-size=1280,800` 的**值本身含逗号**——agent-browser 对 ARGS 按逗号硬拆（README Options 表宣称「comma or newline separated」，0.38.2 换行实测**不生效**），拆出的孤立项（如 `800`）被 Chrome 当位置参数 = 启动 URL → 整数 IP。**每次启动 Chrome 必现一个**，与恢复无关。修复：ARGS 只留无逗号参数。**注意**：当时「改用 `--silent-launch` 实现无窗口」的结论已被推翻（该参数不存在、被静默忽略，见「静默运行」节），正确解法是默认 headless。**教训：ARGS 机制传不了含逗号的值；含逗号的 Chrome 参数在此工具上不可用。**
 
 **宿主状态异常时全自动自愈（2026-10-15 凌晨，端到端实测 PASS）**：sock 存在但端口不可发现 = 宿主已坏，wrapper 自愈而非报错——结束异常/已死 daemon 并清状态 → 结束孤儿 Chrome（**严格按 `user-data-dir=…/profiles/main` 匹配，绝不碰日常 Chrome**）并清 Singleton 锁 → 清掉全部失效房客 daemon 与绑定 → 本次调用转宿主重启。跑批（`GLOBAL_SESSION`/显式 `--session`）自动改用同名独立 profile（`profiles/<名>`），不再与宿主共享 main 而撞 SingletonLock。
 
@@ -89,22 +89,33 @@ wrapper 检测到即按 `.target` 里的 lastUrl 自动重绑并重试一次（�
 - **嵌套调用陷阱（2026-10-14 实测）**：DSH `run_code` 的 program 上声明 `sandbox_permissions` **不会传导给内层 `tools.bash`**——嵌套工具保留各自策略，必须给每个 `tools.bash` 单独传 `sandbox_permissions` + `justification`。表象：提权 program 里的 bash 调 `ps` 仍报 `Operation not permitted`、wrapper probe 仍失败、socket 落点不对。
 - 提权后 `ps -ef` 可用（可核 Chrome 参数与 `--user-data-dir` 落点）；沙盒内 `ps` 静默无输出或被禁，进程取证一律用 `lsof`（`lsof -iTCP -sTCP:LISTEN`、`lsof <socket路径>`、`lsof -c 'Google Chrome'`）。
 
-### 有头静默与去自动化痕迹（2026-10-14 晚用户确认并验收）
+### 静默运行：默认 headless，绝不抢用户焦点（2026-10-15 重写）
 
-**「不影响日常使用」的准确定义：不弹到前台、不抢焦点，不是不能有窗口。** 据此 wrapper 默认（第 3 节，显式 env/flag 一律优先）：
+**「不影响日常使用」的硬标准：不抢前台焦点。** 用户 2026-10-15 直接报告「操作浏览器时把我的焦点抢走，我干什么都会被切到自动化窗口」——根因是当时默认 headed。
 
-| 注入 | 值 | 效果 |
+**实测结论（前台用 `lsappinfo front` 判定 ASN，独立实例受控对照）**：
+
+| 模式 | 抢焦点? | 说明 |
 |---|---|---|
-| `AGENT_BROWSER_HEADED` | `1` | 有头模式，UA 恢复正常 Chrome（消 `HeadlessChrome`） |
-| `AGENT_BROWSER_ARGS` | `--disable-blink-features=AutomationControlled` | 清 `navigator.webdriver`（**必需**：2026-10-14 实测 headed 且无任何 automation flag 时 webdriver 仍为 true——CDP 调试端口启动本身即置位，不压不行） |
-| 同上 | `--silent-launch` | 无窗口静默启动：Chrome 正常有头进程但**不创建窗口**，零打扰（2026-10-15 起；已取代早期「屏幕外窗口」方案——ARGS 按逗号硬拆，含逗号的值传不了，见下「0.0.3.32 垃圾 tab」） |
+| **headless（现行默认）** | **否** | 前台 ASN 全程不变；tab new / open / eval / screenshot 全流程零打扰 |
+| headed | **是** | **一启动就抢走焦点**；窗口移屏外（`--window-position=-32000,-32000`）、`--start-minimized`、启动后 CDP `Browser.setWindowBounds` 搬走窗口，**全都不能避免**——焦点在启动瞬间已丢 |
 
-2026-10-14 实测验收：`navigator.webdriver === false`；UA 为正常 `Chrome/155`；Chrome 参数无 `--headless`、无 `--no-sandbox`；`lsappinfo front` 显示前台非 Chrome；屏幕外窗口 CDP 截图正常。上一版「无痕与无窗口不可兼得」的结论就此作废。
+**`--silent-launch` 是无效参数（2026-10-15 更正）**：grep agent-browser 二进制 0 命中，它**不是** Chrome 也不是 agent-browser 的参数，被静默忽略——窗口照常创建并抢焦点。此前「有头 + silent-launch = 无窗口零打扰」的验收结论**不成立，已作废**；那是屏幕外窗口/未目视确认造成的误判。
 
-**已知取舍**：`AutomationControlled` 会触发 Chrome 顶部「不受支持的命令行标记」警告条——它只存在于屏幕外窗口上（用户主动捞回窗口才可见），网页 JS 无法检测，bot.sannysoft.com 全绿 + creepjs `0% headless / 0% stealth` 实测通过（2026-10-14 用户看到该警告条后确认保留此方案）。**不要改用 init-script 注入覆盖 webdriver**：JS 原型链篡改可被 creepjs 类 lie 检测抓到，检测面更差。
+**wrapper 现行默认**（显式 env/flag 一律优先）：
+
+| 注入 | 值 | 作用 |
+|---|---|---|
+| ~~`AGENT_BROWSER_HEADED`~~ | **不再注入** | 默认走 headless —— 唯一不抢焦点的模式 |
+| `AGENT_BROWSER_ARGS` | `--disable-blink-features=AutomationControlled` | 清 `navigator.webdriver`（headless 下同样有效，实测 `true`→`false`） |
+| `AGENT_BROWSER_USER_AGENT` | 正常 Chrome UA | 消 `HeadlessChrome` 指纹（**必须用官方这个键**；塞进 `AGENT_BROWSER_ARGS` 无效） |
+
+2026-10-15 实测：主进程 `--headless=new`；`navigator.userAgent` 为正常 `Chrome/155`；`navigator.webdriver === false`；`platform=MacIntel`、`plugins=5`、`languages=[zh-CN,zh]`；screenshot 正常；连续多轮 `tab new`/`open`/`eval`/`screenshot` 后 `lsappinfo front` 始终是 Firefox（用户在用的应用），**零切换**。
+
+**已知取舍**：headless 下真实浏览器可能识别无头特征（creepjs 类检测）；有 GUI 需求的站点（WebRTC 设备、部分 WebGPU 截图）在 headless 受限。**需要真窗口时**由调用方显式 `AGENT_BROWSER_HEADED=1`——但那会抢焦点，须先确认用户可被打扰。**不要**用 init-script 篡改 `navigator.webdriver`（可被 creepjs 类 lie 检测抓到）。
 
 - **验证前台占用禁止用 `osascript` + System Events**：会卡辅助功能授权弹窗（本身就是打扰，且拖死执行超时）。用 `lsappinfo front` + `lsappinfo info -only name <ASN>`，纯 CLI 无权限问题。
-- 改动启动配置（headed/args/profile）后必须重建 owner 才生效：先确认没有其他会话正用着，再 `AGENT_BROWSER_ALLOW_CLOSE_SHARED=1 agent-browser close`（普通 `close` 会被硬闸拦住）。重建 owner 会使所有房客绑定失效，wrapper 会自动清掉它们。
+- **daemon 启动参数在首启时固化**：改了 headed/args/profile 后**必须重建 owner 才生效**——否则旧 daemon 会一直用旧配置跑（本次抢焦点问题在重建前一直存在）。重建前确认没有其他会话正用着，用 `AGENT_BROWSER_ALLOW_CLOSE_SHARED=1 agent-browser close`（普通 `close` 会被硬闸拦）；重建会使所有房客绑定失效，wrapper 会自动清掉它们。**重建会关掉当前所有标签**，动手前先看 `tab list` 并告知用户。
 
 ### 沙盒自适应（**历史机制，2026-10-14 晚已从 wrapper 移除**；现行唯一路径 = 提权原生启动，见「复用铁律·提权执行」）
 
@@ -197,6 +208,7 @@ DSH 的 `workspace-write` 沙盒只允许写会话工作区，会让 agent-brows
 ## 严禁事项（红线）
 
 1. **禁止抢焦点 / 置顶窗口**：不得调用任何 OS 级窗口激活（如 AppleScript `activate`）或置顶行为，不得打断用户的键鼠输入。
+   **默认 headless 就是为守住这条**：headed 会在启动瞬间抢走焦点（窗口移屏外/最小化都无效）。**禁止把默认改回 headed**；确需真窗口要先确认用户可被打扰。
 2. **禁止强切用户当前活动标签页**：用户可能正在前台浏览或观看视频，严禁调用 `set active tab` 或粗暴切走其活动页面。
 3. **禁止 `--auto-connect` / `--cdp 9222` 连用户日常 Chrome**（除用户明确要求）：外部 CDP attach 会让 Chrome 弹「有应用正在请求远程控制」，且**每次重连都会再弹一次**。
 4. **禁止杀 daemon 后重连，禁止一切重建 CDP 连接的形式**（`pkill` daemon、重开 WS 握手、重新 attach、重启浏览器），尤其禁止写进重试循环——Chrome 对**每一条**新的 DevTools 握手都会再弹一次「正在请求远程控制」，重建 N 次 = 弹窗 N 次轰炸，自动化也随之全废（用户必须逐次人工确认）。
