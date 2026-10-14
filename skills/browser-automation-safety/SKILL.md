@@ -1,6 +1,6 @@
 ---
 name: browser-automation-safety
-description: 浏览器自动化安全约定与防弹窗红线（本机）：优先用 agent-browser；全机单例（2026-10-14 晚起所有项目/会话共用一个 daemon + 浏览器 + 持久 profile，已由 wrapper 强制）；有头静默与去自动化痕迹（headed + 窗口屏幕外 + 清 webdriver，不弹前台即不打扰）；浏览器二进制选择、daemon/标签页复用、禁止反复新建连接、禁止抢焦点与强切标签、禁止连用户日常 Chrome。触发：用浏览器自动化前；Chrome「正在请求远程控制」弹窗、弹窗轰炸、反复弹窗、抢焦点、窗口乱跳、标签被切走、进程堆积；打开网页/截图/抓取数据/测试 web 应用/登录站点；Electron 自动化（VS Code、Slack、Discord、Figma、Notion）；Slack 消息；探索性测试、QA、找 bug；需要登录态持久或独立 profile；agent-browser 跑成 Chrome for Testing；怀疑 session 重复新建、daemon 被反复重启。
+description: 浏览器自动化安全约定与防弹窗红线（本机）：优先用 agent-browser；全机共用一个浏览器 owner + 每个会话独立房客（2026-10-15 起跨会话可连接且会话间互不影响，已由 wrapper 强制）；有头静默与去自动化痕迹（headed + 窗口屏幕外 + 清 webdriver，不弹前台即不打扰）；浏览器二进制选择、daemon/标签页复用、禁止反复新建连接、禁止抢焦点与强切标签、禁止连用户日常 Chrome。触发：用浏览器自动化前；Chrome「正在请求远程控制」弹窗、弹窗轰炸、反复弹窗、抢焦点、窗口乱跳、标签被切走、进程堆积；打开网页/截图/抓取数据/测试 web 应用/登录站点；Electron 自动化（VS Code、Slack、Discord、Figma、Notion）；Slack 消息；探索性测试、QA、找 bug；需要登录态持久或独立 profile；agent-browser 跑成 Chrome for Testing；怀疑 session 重复新建、daemon 被反复重启。
 ---
 
 # 浏览器自动化安全（Browser Automation Safety）
@@ -11,58 +11,61 @@ description: 浏览器自动化安全约定与防弹窗红线（本机）：优�
 
 **关键点：本节约定与本机 `~/.agent-browser/config.json` 共同生效——不要绕过配置文件去手写 env。**
 
-## 复用铁律：全机单例（所有项目/会话共用一个实例，已由 wrapper 强制）
+## 复用铁律：一个浏览器 owner + 每会话独立房客（2026-10-15 起，已由 wrapper 强制）
 
-**2026-10-14 晚用户拍板，取代旧「会话级固化」三件套**：跨项目、跨会话、手动终端——全机共用**一个 daemon + 一个浏览器 + 一个持久 profile**。旧版「按 DSH 会话注入 session 名 + 沙盒内目录重定向 + 注入 `--no-sandbox`」的逻辑已从 wrapper 删除。
+**目标同时满足两条**：① 跨会话、跨进程功能连接（登录态全机共享、不反复弹窗、不重复起浏览器）；② 不同会话之间互不影响（谁也顶不掉谁的页面）。
 
-**默认路径即正确路径**：直接 `agent-browser <命令>`，wrapper（`~/.agents/bin/agent-browser`，`~/.local/bin` 与 `~/.bun/bin` 两个 symlink 同指）自动注入三要素，**显式指定一律优先**：
+**架构**：`shared` session 降级为**纯浏览器 owner**——只负责持有 Chrome（`profiles/main`、常驻、禁用空闲回收），**永不承载用户命令**。每个 DSH 会话（含冷启动者）一律以 **pinned 房客**身份运行：独立 session 名 + `--cdp <owner 端口>` + `--pin-tab`，且 wrapper **每次调用都重复注入**这两个参数。
 
-| 要素 | 默认值 | 说明 |
-|---|---|---|
-| session | `shared` | 全机唯一 daemon（旧版是 `dsh-<会话id后8位>`，每会话一个实例） |
-| profile | `~/.agent-browser/profiles/main` | 登录态全机持久、跨项目共享（登录一次到处可用） |
-| socket | `~/.agent-browser/shared.sock` | 唯一落点；默认目录不可写时 wrapper **直接报错退出**（不再重定向 TMPDIR/.workwork），提示提权执行 |
+**默认路径即正确路径**：直接 `agent-browser <命令>`，wrapper（`~/.agents/bin/agent-browser`，`~/.local/bin` 与 `~/.bun/bin` 两个 symlink 同指）自动完成全部装配，**显式指定一律优先**：
 
-2026-10-14 实测验收：两个独立进程先后连接，daemon pid 恒定（71448）；`ps -ef` 核对 Chrome 启动参数**无 `--no-sandbox`**，原生沙盒完整，`--user-data-dir` 正确落在 `profiles/main`。
+| 角色 | session | profile | 说明 |
+|---|---|---|---|
+| owner（浏览器） | `shared` | `~/.agent-browser/profiles/main` | 只持有 Chrome；登录态全机持久、跨项目共享（登录一次到处可用） |
+| 房客（每次调用） | `dsh-<DSH_SESSION_ID 的 sha256 前 8 位>` | 不注入 | 靠 `--cdp` attach 到 owner，`--pin-tab` 钉住自己的 tab |
+| 显式独立实例 | 调用方指定 | `profiles/<名>` | 跑批/隔离用；不受房客逻辑影响 |
 
-### 全局单例下的使用约定（新）
+socket 与状态落点：`~/.agent-browser/*.sock`；默认目录不可写时 wrapper **直接报错退出**（不重定向 TMPDIR/.workwork），提示提权执行。
 
-- **严禁随手 `close`**：session 全机只有一个，close = 关掉所有人的浏览器。只允许关自己临时换名的实例（见下）。**2026-10-14 晚起 wrapper 已硬拦**（见下节「close 硬闸」）；daemon 空闲回收已被 wrapper 禁用（注入 `AGENT_BROWSER_IDLE_TIMEOUT_MS=0`），浏览器常驻是单例模型的既定语义，不会再 1 小时无差别关窗。
-- **标签互踩**：所有项目共享同一窗口，`open` 会复用当前标签——并发任务一律 `tab new` 开自己的标签，严禁把别人的标签导航走；任务结束关自己的 tab。
-- **跑批 / 长会话劣化**（旧规则仍有效，跑批用独立实例）：`AGENT_BROWSER_GLOBAL_SESSION=<项目固定名> agent-browser <命令>` 临时换名，用完 `agent-browser --session <名> close` 即还。
+**2026-10-15 实测验收**：owner + 3 房客 × 5 轮交错 open/eval **5/5 通过**（每会话恒定看到自己的页面）；3 会话真并发 3/3；12 轮 soak 12/12；跨进程 `localStorage` 互不串；owner Chrome 全程存活（daemon pid 不变）；owner 崩溃 + 脏状态自愈后隔离仍成立；5 次房客 open+close 无标签泄漏。
+
+### 使用约定
+
+- **正常用法就是什么都不加**：`agent-browser <命令>` 即自动成为本会话的房客，天然隔离。**不要**为了"隔离"而手写 `tab new` 或改 session。
+- **不要传 `--cdp`**：wrapper 已注入。漏传/自传都会破坏绑定（`--cdp` **不是 sticky**——实测漏传一次该 session 就掉回 owner 并顶掉别人页面）。
+- **跑批 / 长会话劣化**：用独立实例 `AGENT_BROWSER_GLOBAL_SESSION=<项目固定名> agent-browser <命令>`（自带 `profiles/<名>`），用完 `agent-browser --session <名> close` 即还。
 - **显式 `--session` / `--profile` 一律尊重**（如 fft_cover 的 `--profile auto`），既有项目用法不受影响。
-- **任务中途不要重建 daemon**（等待用 `--default-timeout` / `wait` / `eval` 轮询，绝不靠 kill 重启）。
+- **任务中途不要重建 owner daemon**（等待用 `--default-timeout` / `wait` / `eval` 轮询，绝不靠 kill 重启；owner 重建会使所有房客绑定失效，wrapper 会清掉它们，但当前任务该重开就重开）。
+- 需要退回旧的 shared 单例行为：`AGENT_BROWSER_GUEST_MODE=0`。
 
-### close 硬闸与多会话并发（2026-10-14 晚机制化，六个用例实测通过）
+### close 硬闸与标签归属（2026-10-15 修订）
 
-**当天多会话并发实测暴露四个冲突源**（「会话A关掉会话B的窗口」的完整机理，全部出自本机取证与上游 README）：
+**四个冲突源**（全部出自本机取证与上游 README）：
 
-1. 任意会话执行 `close`（shared 是唯一 session）= 关掉全机浏览器，所有并发会话一起断；
+1. 任意会话执行 `close` 且落在 owner = 关掉全机浏览器，所有并发会话一起断；
 2. `close --all` 连其他命名 session（跑批独立实例）一起关；
-3. 同 session 内 `open` 走 legacy 行为——**导航走共享的当前 tab**（README #1530 一节明示），别人的页面被顶掉；
+3. 同 session 内 `open` 走 legacy 行为——**导航走该 session 的当前 tab**（上游 README #1530 一节明示）；
 4. daemon 空闲 1h 自动回收（上游默认行为）= 窗口无差别消失，与误操作无关。
 
-**wrapper 已加两层机制**（`~/.agents/bin/agent-browser`，硬闸在 probe 之前，沙盒内即可测）：
+**wrapper 现行机制**：
 
-- **close 硬闸**：`close`（session 解析为 shared 时）与 `close --all`（一律）被拦，exit 1 并提示正确做法。显式非 shared 的 session（跑批实例用完即还）照常放行；逃生门 `AGENT_BROWSER_ALLOW_CLOSE_SHARED=1`，仅确认无其他会话正在使用时用。验证命令（沙盒内）：`agent-browser close` 应报「已拦截」，`agent-browser --session x close` 应走到 probe 段。
-- **空闲回收禁用**：默认注入 `AGENT_BROWSER_IDLE_TIMEOUT_MS=0`（env 名以 README Options 表为准，`_MS` 结尾，勿凭记忆写成 `IDLE_TIMEOUT`）；调用方显式传 `--idle-timeout` 或同名 env 时不覆盖。
+- **close 硬闸**：仅拦**显式 `--session shared`** 与 `close --all`（一律），exit 1 并提示正确做法；**房客 `close` 放行**（属合法自清理：先关掉自己的 tab 再退 daemon）。逃生门 `AGENT_BROWSER_ALLOW_CLOSE_SHARED=1`，仅确认无其他会话正在使用时用。
+- **空闲回收禁用**：默认注入 `AGENT_BROWSER_IDLE_TIMEOUT_MS=0`（env 名以 README Options 表为准，`_MS` 结尾，勿凭记忆写成 `IDLE_TIMEOUT`）；调用方显式传 `--idle-timeout` 或同名 env 时不覆盖。仅 owner 禁用；房客 daemon 1h 自退、下次按 targetId 重挂。
+- **标签不泄漏**：房客 close 前先 `tab close` 掉自己 pinned 的那个 tab（旧实现只退 daemon，实测会累积僵尸 tab）。
 
-**⚠️ 多 session + pin-tab 结论已被推翻（2026-10-15 凌晨深度压测）**：前一晚短窗口观察曾「四项全过」（tab 隔离/close 无害/tab_gone 显式失败/弹窗无阻塞），但连续压测暴露结构性缺陷——**房客 session 的 daemon 启动/执行会杀死同 profile 的宿主 Chrome**：attach 目标是 DevToolsActivePort 记录的活端口却 Connection refused，宿主 Chrome 随之死亡；受控实验三轮全部复现（全清零后纯宿主 5/5 稳定 → 引入一条房客命令即进入「房客杀 → 宿主重建 → 房客再杀」死循环），与是否携带 `--profile` 无关，属 agent-browser 0.38.2 attach 模式与 profile 守护逻辑之间的缺陷，wrapper 层无法修复。**现行 wrapper 已默认关闭房客模型（全部走 shared 单例，稳定已验证 5/5），实验开关 `AGENT_BROWSER_GUEST_MODE=1`**；多会话并发的现行替代：共享单 session + `tab new` 纪律 + close 硬闸，跑批用 GLOBAL_SESSION 独立实例（`profiles/<名>`）。根治候选：上游 issue、MCP 模式（单进程内多 session，需确认 DSH 支持）。以下为被推翻前的原始观察，仅作历史记录（其中的 tab_gone 行为、弹窗结论仍有效，attach 稳定性结论作废）：
+**`tab_gone` 是设计行为**：自己钉的 tab 被关掉后，下条命令显式报
+`tab_gone: bound tab is gone (…, last url …). Run agent-browser tab new <url> to bind a new tab`
+（exit 1），`tab new <url>` 即恢复；绝不静默操作别人的 tab。
 
-```bash
-# 宿主 = 单例 shared（wrapper 默认，常驻）；端口从 profiles/main/DevToolsActivePort 首行读
-# （Chrome 以 --remote-debugging-port=0 动态端口启动）
-PORT=$(head -1 ~/.agent-browser/profiles/main/DevToolsActivePort)
-agent-browser --session <名> --cdp $PORT --pin-tab tab new --label <名> <url>
-agent-browser --session <名> --cdp $PORT --pin-tab eval location.href
-```
+**关键机制（2026-10-15 实测，三次推翻后的最终结论）**：
 
-1. **tab 隔离**：房客 A 导航，房客 B 与宿主纹丝不动（example.com→example.net 实测）；
-2. **房客 close 无害**：只退自己 daemon（附带一条误导性「Chrome exited early」报错，exit 1，可忽略），宿主 Chrome 与其他房客无恙——「误 close 杀全机」在多 session 模式下结构性消除；
-3. **tab_gone**：自己钉的 tab 被他人关闭后，下条命令显式报 `tab_gone: bound tab is gone (…, last url …). Run agent-browser tab new <url> to bind a new tab`（exit 1），`tab new <url>` 即恢复，绝不静默操作别人的 tab；
-4. **弹窗**：多 session 多次 WS 握手全程自动化无阻塞（独立 profile 无「请求远程控制」阻塞；窗口在屏幕外，是否可见弹窗未目视确认）。
+- `--pin-tab` 自上游 **0.34.0**（PR #1589）起提供，按 CDP targetId 持久化 session→tab 绑定并跨 daemon 重启恢复；**本机 0.38.2 已含**（上游 issue #1530 即该机制所修，标题为「会话共享一个 Chrome 时互相劫持 tab」，与「宿主 Chrome 进程被杀」**不是**同一机制——此前 SKILL 里"同源"的说法是误读，已更正）。
+- **但 `--cdp` 参数不是 sticky**：实测漏传一次，该 session 立即掉回 owner 的活动 tab（读到别人的页面）。故 wrapper **每次调用都重复注入** `--cdp` + `--pin-tab`。
+- **owner session 自身不受 `--pin-tab` 保护**：它的活动 tab 仍跟随全局活动 tab——房客一 `open` 新 tab，owner 再 `eval` 就读到房客的页面（`shared.target` 文件没变，eval 结果已漂移）。**这正是本架构把 owner 定为"不承载用户命令"的原因**。
+- 会话名必须对完整 `DSH_SESSION_ID` 取哈希：早期用"末 8 字符"，实测两个不同会话可碰撞到同一 session（`postheal-…aaaa` 与 `soakaaaa-…aaaa` → 都是 `dsh-0000aaaa`），绑定互相覆盖并报 `tab_gone`。
+- owner 重新拉起/自愈时，旧房客 daemon 与绑定全部作废，wrapper 会清掉它们（否则下次命令 `tab_gone`）。
 
-**wrapper 已用 TypeScript 重写（2026-10-15 凌晨上线，shebang `#!/usr/bin/env bun`，bash 版已退役、备份于各工作区 .workwork/backup-agent-browser/）**：调用方无需任何姿势——显式指定（`--session`/`--profile`/`AGENT_BROWSER_SESSION`/`AGENT_BROWSER_GLOBAL_SESSION`）→ 调用方全权；否则全部走 shared 宿主单例（宿主注入 `--pin-tab` + 禁用空闲回收，浏览器常驻）。close 硬闸、宿主异常全自动自愈（清 stale 状态/结束孤儿 Chrome（严格按 user-data-dir 匹配）/重置 exit_type 防崩溃恢复）、profile 规则（宿主 main、跑批 `profiles/<名>`）全部保留并经回归验证。参数一律数组 spawn 传递（无 shell 词法拆分）、Preferences 原生 JSON 读写——bash 版的模板串转义/多字节解析/引号嵌套类问题整类消除。仅宿主禁用空闲回收（IDLE_TIMEOUT_MS=0）。排障开关 `AGENT_BROWSER_WRAPPER_DEBUG=1`。房客(attach)模型默认关闭（见上条「结论已被推翻」），实验开关 `AGENT_BROWSER_GUEST_MODE=1`。
+**早期误判记录（供追溯，勿再采信）**：曾把「房客 session 启动/执行会杀死宿主 Chrome」归因为 **agent-browser 0.38.2 的 `--cdp` attach 缺陷**。2026-10-15 定位真因：**wrapper 自己的 bug**——房客门禁默认关闭 + 第 1) 段无条件把 session 设回 `shared`，使带 `--cdp` 的命令以 `session=shared` 发出，owner 会话于是去连自己的端口并重启自己。上游 0.38.2→0.39.1 无任何相关修复条目（经 release notes 与 10-commit diff 核对），**升级 0.39.1 对本问题无帮助**。
 
 **「0.0.3.32 垃圾 tab」根因与修复（2026-10-15 凌晨实测，用户屏幕上出现过）**：见到 `http://0.0.3.32/` 这类 0.0.x.x 的 tab，先按「**数字被 Chrome 当整数 IP 解析**」排查（0.0.3.32 = 整数 800，反查：`python3 -c "import ipaddress; print(ipaddress.ip_address(800))"`），不要先怀疑会话恢复。本次真因：wrapper 的 `AGENT_BROWSER_ARGS` 用逗号分隔多个参数，而 `--window-position=-32000,-32000` / `--window-size=1280,800` 的**值本身含逗号**——agent-browser 对 ARGS 按逗号硬拆（README Options 表宣称「comma or newline separated」，0.38.2 换行实测**不生效**），拆出的孤立项（如 `800`）被 Chrome 当位置参数 = 启动 URL → 整数 IP。**每次启动 Chrome 必现一个**，与恢复无关。修复：ARGS 只留无逗号参数，窗口方案改 `--silent-launch`（Chrome 正常有头进程但无窗口，零打扰，UA 正常、webdriver=false、CDP 自动化全部正常，实测通过）——比「屏幕外窗口」更干净。**教训：ARGS 机制传不了含逗号的值；含逗号的 Chrome 参数在此工具上不可用。**
 
@@ -72,7 +75,7 @@ agent-browser --session <名> --cdp $PORT --pin-tab eval location.href
 
 - **`--cdp` 漏带 = 波及宿主**：房客命令不带 `--cdp` 时，daemon 状态为 `browserLaunched:false`，会尝试用 main profile spawn 第二个 Chrome → SingletonLock 冲突 → **宿主的 DevToolsActivePort 文件被搞没**（宿主 Chrome 本体存活，已知端口仍可用）。端口兜底发现：`lsof -iTCP -sTCP:LISTEN -nP` 找 Google，再 `ps -o command= -p <pid>` 核对 `user-data-dir=…/profiles/main`。
 - **持久 profile 重启会恢复旧 tab**：宿主 Chrome 重启时自动恢复上次会话的 tab 群（实测恢复出一批已死会话的 `http://0.0.3.32/` 残留）。清理 tab **严禁盲关「非当前 tab」**——先甄别归属（活跃会话 vs 恢复残留），只关确属自己或已死会话的。
-- **房客 daemon 清理**：`--session <名> close` 只断连不退 daemon；彻底退出需 `kill <daemon_pid>`（`lsof -p <pid>` 看它打开的 `<名>.sock` 辨认归属）。
+- **房客 daemon 清理**：普通 `agent-browser close` 会关掉自己的 tab 并退掉自己的 daemon（wrapper 现行行为）；`--session <名> close` 只断连不退 daemon，彻底退出需 `kill <daemon_pid>`（`lsof -p <pid>` 看它打开的 `<名>.sock` 辨认归属）。
 - **pin 只保护已有绑定、不重新分配（2026-10-15 实测）**：房客 daemon 一旦绑了别人的 tab（如混用期的旧绑定），pin 反而把它锁死在那个 tab 上。修复：kill 房客 daemon + 删 `~/.agent-browser/<名>.*`，下次命令全新 daemon + pin → 按 README 语义开 fresh tab（受控实验已验证）。
 - **宿主也必须 pin（2026-10-15 实测）**：无 pin 的 session 活动表跟随 Chrome 全局活动 tab——房客一开新 tab 宿主就被挪走，两边绑定撞成同一 targetId。wrapper 已给宿主注入 `--pin-tab`；对在跑的旧 daemon 补发一条带 `--pin-tab` 的命令即 sticky 生效。
 - **grep 模式以 `-` 开头必须用 `-e` 传**（wrapper 端口发现实测踩坑）：`grep -oE '->...'` 报 `invalid option -- >`，写 `grep -oE -e '->...'`。
@@ -91,14 +94,14 @@ agent-browser --session <名> --cdp $PORT --pin-tab eval location.href
 |---|---|---|
 | `AGENT_BROWSER_HEADED` | `1` | 有头模式，UA 恢复正常 Chrome（消 `HeadlessChrome`） |
 | `AGENT_BROWSER_ARGS` | `--disable-blink-features=AutomationControlled` | 清 `navigator.webdriver`（**必需**：2026-10-14 实测 headed 且无任何 automation flag 时 webdriver 仍为 true——CDP 调试端口启动本身即置位，不压不行） |
-| 同上 | `--window-position=-32000,-32000 --window-size=1280,800` | 窗口在屏幕外：存在、不进视野、不抢前台 |
+| 同上 | `--silent-launch` | 无窗口静默启动：Chrome 正常有头进程但**不创建窗口**，零打扰（2026-10-15 起；已取代早期「屏幕外窗口」方案——ARGS 按逗号硬拆，含逗号的值传不了，见下「0.0.3.32 垃圾 tab」） |
 
 2026-10-14 实测验收：`navigator.webdriver === false`；UA 为正常 `Chrome/155`；Chrome 参数无 `--headless`、无 `--no-sandbox`；`lsappinfo front` 显示前台非 Chrome；屏幕外窗口 CDP 截图正常。上一版「无痕与无窗口不可兼得」的结论就此作废。
 
 **已知取舍**：`AutomationControlled` 会触发 Chrome 顶部「不受支持的命令行标记」警告条——它只存在于屏幕外窗口上（用户主动捞回窗口才可见），网页 JS 无法检测，bot.sannysoft.com 全绿 + creepjs `0% headless / 0% stealth` 实测通过（2026-10-14 用户看到该警告条后确认保留此方案）。**不要改用 init-script 注入覆盖 webdriver**：JS 原型链篡改可被 creepjs 类 lie 检测抓到，检测面更差。
 
 - **验证前台占用禁止用 `osascript` + System Events**：会卡辅助功能授权弹窗（本身就是打扰，且拖死执行超时）。用 `lsappinfo front` + `lsappinfo info -only name <ASN>`，纯 CLI 无权限问题。
-- 改动启动配置（headed/args/profile）后必须 `close` 重建 daemon 才生效；重建前确认没有其他会话正用着共享实例。
+- 改动启动配置（headed/args/profile）后必须重建 owner 才生效：先确认没有其他会话正用着，再 `AGENT_BROWSER_ALLOW_CLOSE_SHARED=1 agent-browser close`（普通 `close` 会被硬闸拦住）。重建 owner 会使所有房客绑定失效，wrapper 会自动清掉它们。
 
 ### 沙盒自适应（**历史机制，2026-10-14 晚已从 wrapper 移除**；现行唯一路径 = 提权原生启动，见「复用铁律·提权执行」）
 
@@ -194,7 +197,7 @@ DSH 的 `workspace-write` 沙盒只允许写会话工作区，会让 agent-brows
 2. **禁止强切用户当前活动标签页**：用户可能正在前台浏览或观看视频，严禁调用 `set active tab` 或粗暴切走其活动页面。
 3. **禁止 `--auto-connect` / `--cdp 9222` 连用户日常 Chrome**（除用户明确要求）：外部 CDP attach 会让 Chrome 弹「有应用正在请求远程控制」，且**每次重连都会再弹一次**。
 4. **禁止杀 daemon 后重连，禁止一切重建 CDP 连接的形式**（`pkill` daemon、重开 WS 握手、重新 attach、重启浏览器），尤其禁止写进重试循环——Chrome 对**每一条**新的 DevTools 握手都会再弹一次「正在请求远程控制」，重建 N 次 = 弹窗 N 次轰炸，自动化也随之全废（用户必须逐次人工确认）。
-5. **禁止 `close --all`**：会关掉本机其他 agent 的 session。只关自己用的那个。**2026-10-14 起全机单例后更严：普通 `close` 也会关掉全机共享实例（`shared`），同样严禁随手执行**（见「复用铁律·使用约定」）。wrapper 已对两者硬拦，逃生门 `AGENT_BROWSER_ALLOW_CLOSE_SHARED=1`（见下节）。
+5. **禁止 `close --all`；禁止关闭 owner**：`close --all` 会关掉本机所有 session；显式 `--session shared close` 会关掉全机共享的浏览器 owner。**2026-10-15 起普通 `agent-browser close` 只关你自己会话的 tab 与 daemon（合法自清理），无需也不应加 session 参数**。wrapper 已硬拦上述两者，逃生门 `AGENT_BROWSER_ALLOW_CLOSE_SHARED=1`（见「close 硬闸」）。
 6. **禁止每次执行都 `open` 新标签**：制造孤儿标签（见下「标签页复用」）。
 
 ## 唯一例外：确需操作用户日常 Chrome（有登录态）
@@ -332,7 +335,7 @@ const SESSION = 'travel-smoke';
 不能靠口头纪律，要状态文件硬闸：连接失败写持久标记（如 cdp-state.json result:fail），
 后续调用直接拒绝；结果可复用时（文件已存在）优先复用不重发；全流程合并为单命令，
 整个进程只握手一次。验证方式：写 fail 标记后调用应被拒绝、无连接产生。
-**Chrome 自动化统一单一 profile（2026-10-14 晚用户验收；当晚已推广为全机默认——`profiles/main` + session `shared`，见「复用铁律」，fft_cover 的 auto profile 作为显式指定继续有效）**：全部自动化
+**Chrome 自动化统一单一 profile（2026-10-14 晚用户验收；2026-10-15 起 `profiles/main` 为浏览器 owner 专属，用户命令跑在房客里——见「复用铁律」，fft_cover 的 auto profile 作为显式指定继续有效）**：全部自动化
 （截图/e2e/登录态操作）固定用 **一个** profile + 固定 session 名（本项目实例：
 /tmp/fft-agent-profile + session auto），每条调用显式带 --session 与 --profile，
 缺一个就会落到 wrapper 注入的默认临时 profile（假性数据「丢失」）。位置选 /tmp
