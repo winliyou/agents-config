@@ -1,6 +1,6 @@
 ---
 name: browser-automation-safety
-description: 浏览器自动化安全约定与防弹窗红线（本机）：优先用 agent-browser；全机共用一个浏览器 owner + 每个会话独立房客（2026-10-15 起跨会话可连接且会话间互不影响，已由 wrapper 强制）；静默运行与去自动化痕迹（默认 headless 绝不抢焦点 + 清 webdriver + 官方 UA 覆盖消 HeadlessChrome）；浏览器二进制选择、daemon/标签页复用、禁止反复新建连接、禁止抢焦点与强切标签、禁止连用户日常 Chrome。触发：用浏览器自动化前；Chrome「正在请求远程控制」弹窗、弹窗轰炸、反复弹窗、抢焦点、窗口乱跳、标签被切走、进程堆积；打开网页/截图/抓取数据/测试 web 应用/登录站点；Electron 自动化（VS Code、Slack、Discord、Figma、Notion）；Slack 消息；探索性测试、QA、找 bug；需要登录态持久或独立 profile；agent-browser 跑成 Chrome for Testing；怀疑 session 重复新建、daemon 被反复重启。
+description: 浏览器自动化安全约定与防弹窗红线（本机）：优先用 agent-browser；全机共用一个浏览器 owner + 每个会话独立房客（2026-10-15 起跨会话可连接且会话间互不影响，已由 wrapper 强制）；静默运行与去自动化痕迹（默认 headless 绝不抢焦点 + 清 webdriver + 官方 UA 覆盖消 HeadlessChrome）；浏览器二进制选择、daemon/标签页复用、禁止反复新建连接、禁止抢焦点与强切标签、禁止连用户日常 Chrome。触发：用浏览器自动化前；Chrome「正在请求远程控制」弹窗、弹窗轰炸、反复弹窗、抢焦点、窗口乱跳、标签被切走、进程堆积；打开网页/截图/抓取数据/测试 web 应用/登录站点；Electron 自动化（VS Code、Slack、Discord、Figma、Notion）；Slack 消息；探索性测试、QA、找 bug；需要登录态持久或独立 profile；agent-browser 跑成 Chrome for Testing；怀疑 session 重复新建、daemon 被反复重启；**Gemini 网页版自动化**（上传图片/文件失败、点「上传和工具」没反应、input[type=file] 找不到、图片传上去但 Gemini 说没图、读不到 Gemini 回答、标签在后台导致菜单不渲染）。
 ---
 
 # 浏览器自动化安全（Browser Automation Safety）
@@ -88,6 +88,12 @@ wrapper 检测到即按 `.target` 里的 lastUrl 自动重绑并重试一次（�
 - 一切 `agent-browser` 调用（含纯查询的 `session info`——也要连 socket）在 `workspace-write` 沙盒内会因 `~/.agent-browser` 不可写被 wrapper **硬失败拦截**（exit 1，stderr 有明确提示）。此时对该命令申请 `danger-full-access` 即可，不要绕行。
 - **嵌套调用陷阱（2026-10-14 实测）**：DSH `run_code` 的 program 上声明 `sandbox_permissions` **不会传导给内层 `tools.bash`**——嵌套工具保留各自策略，必须给每个 `tools.bash` 单独传 `sandbox_permissions` + `justification`。表象：提权 program 里的 bash 调 `ps` 仍报 `Operation not permitted`、wrapper probe 仍失败、socket 落点不对。
 - 提权后 `ps -ef` 可用（可核 Chrome 参数与 `--user-data-dir` 落点）；沙盒内 `ps` 静默无输出或被禁，进程取证一律用 `lsof`（`lsof -iTCP -sTCP:LISTEN`、`lsof <socket路径>`、`lsof -c 'Google Chrome'`）。
+- **tools.bash 单独传 sandbox_permissions 也可能不生效（2026-10-15 补充实测）**：即便给内层 `tools.bash` 传了 `danger-full-access`，其子进程仍跑在受限沙盒里（wrapper probe 仍报不可写）——该参数语义是「对刚被拒的命令做一次性重试」，无在先拒绝记录时不触发提权。**可靠路径：顶层 program 拿到提权后，在 program 内用 `node:child_process` 直 spawn wrapper**，子进程继承 program 的宽松沙盒。
+- **run_code 直 spawn 的环境三坑（2026-10-15 实测）**：DSH run_code 进程的 env 不能直接用，spawn 时必须显式补全，否则三个独立失败：
+  ① `HOME` 为 **undefined** → wrapper `REAL = HOME + "/.bun/install/global/..."` 拼出 `/.bun/...` ENOENT；
+  ② `PATH` 残缺（缺 `/usr/bin:/bin:/usr/sbin:/sbin`）→ wrapper 依赖的 `lsof`/`pgrep`/`pkill`、bun/node 解释器、ohpm 脚本依赖的 `sed`/`dirname`/`uname` 全部 ENOENT（表象：莫名 exit 126/127 与 "command not found"，极易误判为工具坏了）；
+  ③ 无 `DSH_SESSION_ID` → wrapper 房客名退化为 `manual-<ppid%1e6>`，而 run_code 每次调用的 pid 不同 → **每条命令都是新房客**，看不到自己上一条钉的 tab（表象：open 成功后下一条 get url 变 about:blank、snapshot ref 全部 Unknown ref——像"tab 丢失"，实为 session 漂移）。修法：env 显式传**固定** `DSH_SESSION_ID`。
+  验证可用的 spawn env：`{ ...process.env, HOME: "/Users/liyou", DSH_SESSION_ID: "<项目固定名>", PATH: "/Applications/DevEco-Studio.app/Contents/tools/node/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" }`。
 
 ### 静默运行：默认 headless，绝不抢用户焦点（2026-10-15 重写）
 
@@ -245,6 +251,7 @@ agent-browser --auto-connect <命令>          # 等价：AGENT_BROWSER_CDP=9222
 - **先查清监听者是谁再连**：`lsof -iTCP:9222 -sTCP:LISTEN` 只说明有 Chrome 在监听，不说明可以连；再 `lsof -p <pid>` 看打开文件——落在 `~/Library/Application Support/Google/Chrome/Default/` 就是用户日常 Chrome，**直接换独立实例，不要连**（2026-09-25 实测：gemini-gen 旧管线直连 9222 导致每次重连都向用户弹「请求远程控制」，已迁移到独立实例）。AI 会话沙盒常禁 `ps`（报 `/bin/ps: Operation not permitted`），用 lsof 取证。
 - **独立实例三要素**：独立 user-data-dir + 独立端口（如 9223）+ 常驻 daemon 单连接复用（断线退避自愈，严禁 kill/重连循环——同弹窗红线 4）。
 - **Chrome 111+ 握手细节**：browser WS 只认 `/json/version` 返回的带 UUID `webSocketDebuggerUrl`（`/devtools/browser` 短路径 404）；WS 请求带 `Origin` 头会 403；日常 Chrome（默认 profile）对 `/json/version` HTTP 端点返回 404 属正常，独立 profile 返回完整 JSON。
+- **共享 owner Chrome 既有 CDP 端口直连（2026-10-15 实测，hotspot UI 审查流水线）**：与上条「自带 Chrome spawn」互补的免提权路径——**不 spawn 新浏览器、复用 owner 已有登录态**。步骤：`lsof -iTCP -sTCP:LISTEN -nP | grep Google` 找 owner（pid 对应 `--user-data-dir=…/profiles/main`）的动态调试端口 → `/json` 列 tab、`PUT /json/new?<url>` 开**自己的新 tab**（绝不 attach 他人 tab）→ Node 原生 WebSocket → `Input.dispatchMouseEvent` 真实鼠标（**合成 DOM 事件 isTrusted=false 会被 Gemini/Angular 静默忽略——这是合成事件点菜单/发送全部扑空的根因**）→ `DOM.setFileInputFiles` 注入附件（比 upload 命令可靠）→ `Page.captureScreenshot` → `/json/close/<id>` 收尾。全程零 home 写入，workspace-write 沙盒内可跑，**提权审批无人应答时的首选**。坑：Gemini「上传和工具」按钮比编辑器晚约 5s 渲染，editor ready 后直点会扑空；模型状态读「打开模式选择器」aria-label（Flash-Lite=配额耗尽标志）。完整可运行样例：hotspot `.workwork/chrome-shot/cdp-round.mjs`。
 - **agent-browser daemon 整条路线不可用时的兜底：Node 直连 CDP 一发命中（2026-10-14 实测，dsh-plugins 适配验证）**。当日 daemon 路线三连败：①提权审批无人应答时 client 调用**挂到执行超时而非快速失败**（连挂 3 次，每次烧满 2-3 分钟）；②绕过提权用 `AGENT_BROWSER_HOME`+`AGENT_BROWSER_SOCKET_DIR` 重定向起独立实例（`--no-sandbox` 注入），Chrome **起来又干净退出**（无崩溃报告、`DevToolsActivePort` 已写出、进程消失）；③即便短暂存活，页面也会被导航去第三方站点（同机其他自动化会话的恢复竞态/干扰，fresh profile 也躲不开）。此时别恋战：**自带 Chrome（`--headless=new --remote-debugging-port=0 --no-sandbox --user-data-dir=<mkdtemp 临时目录>`）+ Node 内置 WebSocket** 按 browser WS UUID 直连，`Target.createTarget` → `Target.attachToTarget{flatten:true}` → enable `Page/Runtime/Log`，`Runtime.evaluate` 取 title/innerText、`Runtime.consoleAPICalled`/`Log.entryAdded`/`Runtime.exceptionThrown` 收集报错，结束时 `Browser.close`——单次调用内全流程确定性完成，无 daemon、无跨会话干扰。脚本落盘用完整文件写入，**别在外层模板里嵌 `${label}` 之类插值**（写盘时就被外层吃掉，运行时空匹配还不报错）；表达式拼参用 `JSON.stringify(label)`。
 
 ## 脚本化使用时（冒烟测试 / CI）
@@ -358,3 +365,100 @@ const SESSION = 'travel-smoke';
 只覆盖那一次执行）；/tmp 已实测可写且全机可达，代价是机器重启后 profile 清空
 （需重新登录一次）。另：agent-browser eval 结果输出走 stderr，2>/dev/null 会
 误判为无输出。清理旧 profile 先 du 盘点并确认无活进程占用（ProcessSingleton）。
+## Gemini 网页常规自动化（默认 headless owner，2026-10-15 实测）
+
+与上一节的差别：**不需要直连用户日常 Chrome** —— 走 wrapper 默认房客（owner = `profiles/main` headless，登录态已持久），全程零弹窗、零抢焦点。本节所有结论均在本机实测复现。
+
+**开箱可用脚本**：`.workwork/gemini-upload/gemini-image-ask.sh`（示例副本，可自行复制到别处；同目录 `README.md` 有完整排障笔记）。用法
+`./gemini-image-ask.sh -f <图片绝对路径> -p "<提示词>" [-o 输出目录] [-n 在当前对话继续]`。
+它已内置本节全部坑的规避与重试：可见性置前、CSS 选择器点击、菜单内注入、`naturalWidth` 校验、`textContent` + 停止按钮 + 长度稳定的三重完成判据。2026-10-15 实测端到端多轮成功（含"用户给的终端截图"识别为 Homebrew 阿里云镜像配置这类真实判据；单轮约 28-35 秒）。
+
+**独立验证结论（2026-10-15，另一 agent 在独立 `AGENT_BROWSER_GLOBAL_SESSION` 实例上复测）**：端到端 **7/7 成功**（跨两个脚本版本各 3 次 + 1 次"先把标签强制切后台再启动"的自愈测试）。反例也全部如实失败：不点菜单直接 `upload` → `Element not found`；用错 `accept` 选择器 → 同上；传相对路径 → 命令报 `✓ Done` 但 `att=0, has-error=1`（**证实"不能信 upload 的 ✓ Done"**）。该 agent 还用 CDP `Target.activateTarget` 做了受控对照，**实测 rAF 节流：前台 91-93 次/1.2s → 后台恒 1 次/1.2s（约 90 倍）**，后台 5/5 轮 `inputs` 恒为 0（即便 `aria-expanded=true`）——本节坑 0 的机制得到独立确证。
+
+**对坑 0 的一处措辞修正**（验证者实测）：后台标签时 `[role=menu]` **并非**完全不生成，实测菜单元素能出现，只是**里面不含 `input[type=file]`**。"input 恒为 0"是硬事实，"菜单 DOM 完全不生成"说得太满。
+
+### 模型 + 思考等级切换（选择器一览）
+
+| 目标 | 选择器 / 判定 |
+|---|---|
+| 当前模型按钮 | `.picker-primary-text`（取 `[0]`）→ `closest('button')`，取值看其 `aria-label`「打开模式选择器，当前模式为"X"」 |
+| 模式菜单 | 点上面这个 button → `.cdk-overlay-pane [role=menu]` |
+| 模型项 | `gem-menu-item` / `[role=menuitem]`，文本形如 `4 Argon` + 换行 + `复杂任务`；**用行首精确匹配**，别用 `includes`——菜单里同时有 Pro / Flash-Lite |
+| 思考等级 | 菜单里文本为「思考等级」的 `gem-menu-item` → 点开是**二级** `.cdk-overlay-pane`（取 `panes[panes.length-1]`） |
+| 三档 | 「低点 + 快速高效」「中等 + 深度适中」「**高点 + 超级详尽**」（"高思考" = 高点）；选中态是 `class` 含 `selected`，**不是** `aria-checked`（实测恒为 null，别用它判断） |
+
+**验证方式（必做）**：切完后读 `aria-label`，必须变成「当前模式为"Argon 高点"」。
+
+### 图片上传：四个致命坑（2026-10-15 二次实测，脚本 `.workwork/gemini-upload/gemini-image-ask.sh`）
+
+**0. 目标标签必须在【前台】——这是最难定位的一个（2026-10-15 实测定位）**
+
+Chrome 对**后台标签**节流 `requestAnimationFrame`。Gemini 的 Angular CDK 菜单在后台标签里**不渲染菜单内容**：点击「上传和工具」后按钮的 `aria-expanded` **已经变成 `"true"`**（所以看 expanded 会误判成"菜单已开"），但菜单 DOM 不生成、`input[type=file]` 数量**恒为 0**，`upload` 一直报 `Element not found`。
+
+- 实测数据：`document.visibilityState === 'hidden'` 时连点 5 轮，仅约 3 轮 `aria-expanded=true`，且 `inputs` 恒为 0；
+- `agent-browser tab <该标签的 tabId>` 把它切到前台（`visibilityState === 'visible'`）后，**同一次点击立刻拿到 `inputs=3`**。
+- **判据**：动手前先读 `document.visibilityState`；是 `hidden` 就先切到该标签。切完**必须复查**，共享 Chrome 里别的会话可能在同一瞬间又把标签切走，必要时重试一次。
+- **怎么定位"我自己的那个标签"——两个弯路都别走**（2026-10-15 实测）：
+  | 方法 | 结果 |
+  |---|---|
+  | 按 URL 找 | ✗ 页面上常有多个 `https://gemini.google.com/app`（重开对话不改 URL），会选错 |
+  | `document.title` 打标记再按 title 找 | ✗ Gemini 是 SPA，立刻把 title 改回会话名；且 `tab list` 的 title 有缓存，刚设的标记常读不到 |
+  | **`agent-browser tab`（无参）输出里带 `→` 的那行** | ✓ **正解**：`agent-browser tab 2>/dev/null \| grep -- "→" \| grep -oE "t[0-9]+" \| head -1` 拿到本会话 pinned 的 `t<N>`，再 `agent-browser tab <t<N>>` 激活 |
+  | 兜底：本会话 `.target` 文件里的 `targetId` | ✓ `~/.agent-browser/${session}.target` 的 `targetId` 也可直接喂给 `tab` |
+
+1. **`input[type=file]` 只在「上传和工具」菜单打开时才存在于 DOM**。菜单关闭时 `querySelectorAll('input[type=file]')` 返回 `[]`，`upload` 直接报 `Element not found`。
+   正确顺序：点 `[aria-label="上传和工具"]`（即 composer 左侧的 `+`）→ sleep 2~3s → **立即** `upload 'input[type=file][accept="image/*"]' <path>`（菜单里有 2~3 个 file input，必须带 `accept="image/*"` 区分）。
+   > 曾经"成功"过一次纯属巧合：那次恰好是同一段菜单会话未关闭。
+
+2. **必须传绝对路径**。传相对路径时 `upload` **返回 `✓ Done` 但 Chromium 静默拒绝**——附件立刻带 `has-error`，且**网络面板里根本没有上传请求**（不是网络问题！）。本次对照实验：同一个小 PNG，相对路径 8 次全失败、绝对路径一次成功。
+
+3. **不要用 `find role ... --name` 点这个按钮——它会静默失败**。`agent-browser find role button click --name "上传和工具"` 实测 **exit 0、无任何输出、菜单也不展开**，看起来像"点过了"。用 CSS 选择器 `agent-browser click 'button[aria-label="上传和工具"]'` 才稳定命中（2026-10-15 实测，两种写法各跑多轮对照）。
+
+**不要试图用合成的 DragEvent/DataTransfer 伪造拖放**（2026-10-15 实测不可行）：`xap-uploader-dropzone` 在菜单关闭时**根本不在 DOM 里**（实测数量 = 0），`drop` 事件无处可投，dispatch 后附件数仍为 0。真实文件拖拽只有走 `Input.dispatchDragEvent` + `files:[绝对路径]`（见上一节）才成立。
+
+**成功判据（别信 chips 数量）**：
+
+| 状态 | 信号 |
+|---|---|
+| 失败 | `uploader-file-preview-container` 带 `has-error`；内部是 `gem-attachment-loading-error`；无 `gem-media-attachment` |
+| 成功 | `has-error` 消失；出现 `gem-media-attachment`；`gem-media-attachment img` 有 `src`（blob: 缩略图）且 **`naturalWidth > 0`** |
+
+**截图必须传绝对路径（2026-10-15 实测）**：`agent-browser screenshot "$OUTDIR/answer.png"` 传相对路径会**静默失败**——截图相对 daemon 的工作目录解析，不在你的 cwd。实测 `-o ./.out` 只落了 `answer.json`、没有 png。先 `ABS_OUT="$(cd "$OUTDIR" && pwd)"` 再传绝对路径，并检查文件确实存在（别被 `|| true` 吞掉错误）。
+
+**推荐的机器可判定口径（2026-10-15 实测，脚本已内置）**：
+```bash
+# 附件计数（判"是否注入成功"）
+agent-browser eval 'document.querySelectorAll("gem-media-attachment").length'
+# 最强判据：确实是有效图片预览，且尺寸与源图一致
+agent-browser eval 'var i=document.querySelector("gem-media-attachment img"); i&&i.naturalWidth>0?("ok:"+i.naturalWidth+"x"+i.naturalHeight):"bad"'
+```
+后者会返回 `ok:1172x876` 这样的结果，可直接与源图尺寸比对——比数 chips 数量可靠得多。
+
+上传成功的网络链路（用于排障对照）：`OPTIONS/POST push.clients6.google.com/upload/` → `POST .../ProcessFile`，均 200。**若这两条一个都没有，就是本地阶段被拒（路径问题），不是网络问题。**
+
+### 提交与读取回答
+
+- **发送必须用真实点击** `agent-browser click '[aria-label="发送"]'`。`eval "button.click()"` 会返回 sent 但消息**发不出去**（输入框文本原样残留）；`press Enter` 同样无效。发送成功的判据：`.ql-editor` 变空、`[aria-label*=停止]` 出现、附件 chip 消失。
+- **真实点击超时时，CDP 直发 `Input.dispatchKeyEvent` 回车是可靠兜底（2026-10-15 media_center UI 审查实测）**：与上条不矛盾——`press Enter`（经 agent-browser 键入）无效，但经 browser 端 WS 直发 `{type:keyDown/keyUp, key:Enter, code:Enter, windowsVirtualKeyCode:13}` 是 trusted 输入，编辑器有焦点时 Gemini composer 收到即发送。`Input.dispatchMouseEvent` 找不到元素/超时时用它接管。
+- **大文本 `Input.insertText` 超时 ≠ 插入失败（同日实测，28.6K 中文字符 + 代码块）**：CDP 调用 30s 超时抛错，但重连后读 `.ql-editor` 的 `textContent.length` 与头尾内容，确认**文本已全部插入**（渲染进程忙于处理大文本，响应没赶回来）。**先查状态再决定是否重试**——盲目重发会让输入内容翻倍。
+- **渲染器迟缓是连锁的（同日实测）**：insertText 超时后紧接着 `Input.dispatchMouseEvent` 也超时（同一渲染进程忙）。此时轻量 `Runtime.evaluate`（20s 超时）始终可用，判障/读状态/兜底发送全走它；`dispatchMouseEvent` 只留给必须真实指针的场景（开菜单、选模型）。后台 gradle 构建抢 CPU 会显著加剧迟缓，审查流水线别与其并发。
+- 回答容器：`model-response`（或 `[class*=model-response]`）。轮询其长度，`[aria-label*=停止]` 消失即完成（Argon 高点实测 <1 分钟）。
+- **完成判据不能只看"长度 > N"（2026-10-15 实测踩坑）**：写死 `length > 20` 会让**短回答**白等满全部轮次——实测 Gemini 答"主色调为深绿色和亮绿色。"（13 字符）、"深绿色"（3 字符）、"有"（1 字符）都是正常完整回答。正确判据是三条件并列：① 长度 > 0；② 页面上没有"停止"按钮（`[aria-label*=停止],[aria-label*=Stop]` 计数为 0 = 生成已结束）；③ 长度连续 2 次不变。修正后同场景耗时由 4 分钟降到 28 秒。
+- **必须读 `textContent`，不要读 `innerText`（2026-10-15 实测更正）**：无头浏览器里后台标签的 `innerText` **返回空**——实测 `model-response` 的 `innerText.length` 只有 8（就是 "Gemini 说" 这几个字），而 `textContent.length` 有 513。用 innerText 轮询会**永远判不出回答已生成**，误以为"Gemini 没回答"。此前的"轮询 innerText.length"结论只在前台标签成立。
+- **取正文要剥离"非正文"节点，别只删 `img`**（2026-10-15 二次定位）：污染源其实是回答末尾的**引用来源卡片** `<sources-carousel-inline><source-inline-chip><span class="source-title">PNG</span><span class="source-count">+ 2</span>`，拼进正文后是 `…位于画面的中上方。   PNG+ 2`——**看着像图片 alt，实际是来源标签**（第一次排查被它带偏过）。稳妥的 `cloneNode(true)` 后剔除列表：
+  `img,svg,source,picture,sources-carousel-inline,sources-list,source-footnote,source-inline-chip,response-actions,message-actions,gem-icon-button,mat-icon,thinking-overlay`
+- `eval` 返回**对象**时 agent-browser 自己就会输出 JSON（`agent-browser eval '({a:1})'` → `{\n "a": 1\n}`）。**不要再套一层 `JSON.stringify`**，否则落盘文件里是"字符串里再套一层 JSON"，`json.load` 后得到 `str` 而非 `dict`。要拿裸值就直接返回对象；用 `JSON.stringify` 时记住需要二次解析。
+
+### 重渲染会复位状态（务必每步复查）
+
+**刷新或 Angular 重渲染后，思考等级被重置为「低点」、模型可能变回 Pro** —— 本次刷新页面后 `aria-label` 从 Argon 高点 退回 Argon。**上传完图片、发送前，必须重新读 `aria-label` 确认模型与思考等级**，否则白跑。
+
+### 与上一节的取舍
+
+| | 本机默认 owner（headless，本节） | 用户日常 Chrome 直连 CDP（上一节） |
+|---|---|---|
+| 弹窗风险 | 无 | 有，失败一次即停 |
+| 登录态 | `profiles/main` 已持久 | 用户正在用的登录态 |
+| 干扰用户 | 零（headless） | 会抢焦点/切标签 |
+| 结论 | **默认选这个**；仅当 owner profile 无登录态且用户明确要求时，才走上一节 |
+
