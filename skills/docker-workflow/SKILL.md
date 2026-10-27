@@ -14,10 +14,10 @@ description: Docker 优先原则：服务运行、集成/E2E 测试、构建与�
 - 镜像清理：构建或拉取新镜像后按需 `docker image prune` 清理旧版本；不要把 `volume prune` 当作常规步骤。
 - 一致性记录：因硬件、GUI、Android 模拟器等原因只能在宿主机执行的验证，必须说明原因，并尽量补充 Docker 内可执行的构建、接口或服务级验证。
 
-## worktree 隔离（源自 hotspot 实战）
+## worktree 隔离（实战）
 
 - 项目名即隔离：compose 项目名默认取当前目录名——主工作树与 worktree 天然隔离（容器/网络/volume），此时不要显式 `-p` 成主项目名，否则接管主实例；cwd 必须是对应工作树根目录。
-- 目录名同名冲突：worktree 目录名与主工作树同名时（如 `.worktrees/<id>/hotspot`），项目名冲突、直接 `up` 会接管主实例。此时必须显式 `-p <独立名>` 并重映射全部宿主端口：用不入库的 override 文件以 `!override` 替换 `ports`（放 `.workwork/` 这类已忽略目录）；清理时带同样的 `-p` 与 override，禁止用默认 `down -v`（会删除主实例数据卷）。模板（把 `<svc>` 与端口换成项目实际值）：
+- 目录名同名冲突：worktree 目录名与主工作树同名时（如 `.worktrees/<id>/<与主树同名>`），项目名冲突、直接 `up` 会接管主实例。此时必须显式 `-p <独立名>` 并重映射全部宿主端口：用不入库的 override 文件以 `!override` 替换 `ports`（放 `.workwork/` 这类已忽略目录）；清理时带同样的 `-p` 与 override，禁止用默认 `down -v`（会删除主实例数据卷）。模板（把 `<svc>` 与端口换成项目实际值）：
   ```yaml
   services:
     <svc-db>:
@@ -30,12 +30,8 @@ description: Docker 优先原则：服务运行、集成/E2E 测试、构建与�
   启动：`docker compose -p <独立名> -f docker-compose.yml -f <override文件> up -d`；清理：`docker compose -p <独立名> -f docker-compose.yml -f <override文件> down`（不带 `-v`）。
 - 合并后生效：worktree 合并回主分支后，若主环境容器在运行，重启受影响的主容器并确认 healthy；删除 worktree 前先 `down` 清理其 compose 资源。
 
-## DOCKER_CONFIG 重定向（沙盒内用 docker 时）
+## 沙盒内用 docker
 
-**2026-10-14 起 `~/.docker/buildx` 已由 sandbox-extra-roots 放行，沙盒内 `docker compose build` 可直接跑（含 registry 凭据的 `config.json` 有意不放写）；以下重定向规程保留给未配插件的机器。**
+`~/.docker/buildx` 已由 sandbox-extra-roots 放行（含 registry 凭据的 `config.json` 有意不放写），沙盒内 `docker build`/`docker compose build` 直接跑。**不要重定向 `DOCKER_CONFIG`**（会把 registry 凭据搬进 workspace）；报 `open ~/.docker/...: operation not permitted` 时，把该目录加进插件配置即可（见 `sandbox-adaptation`）。
 
-沙盒下 `~/.docker/` 不可写时，用 `DOCKER_CONFIG=<可写目录>` 重定向。**必须整体复制，缺一不可**（2026-09-25 实测）：
-- `contexts/`、`cli-plugins/`、`config.json` 及其余 `*.json` 要一起过去；
-- 只复制 `buildx/`：不报错但**静默丢失当前 context**（回落到 `default`，可能连到错误的 daemon）；
-- 复制了 `config.json`（内含 `"currentContext": "orbstack"`）却没复制 `contexts/`：直接失败 `context "orbstack": context not found`。
-- **注意**：失败时退出码仍是 0，必须看输出文本判成功，不要只看退出码。
+- **退出码不可靠**：buildx/构建命令失败时退出码可能仍是 0（历史上 `| tail` 把失败吞掉），必须看输出文本判成功；长命令先落盘再取退出码：`cmd > log 2>&1; echo "[exit=$?]"`。

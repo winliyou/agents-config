@@ -13,8 +13,10 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 - 只读类操作（代码梳理、架构调研、阅读/检索代码、运行不产生文件改动的命令等）不需要新建 Worktree，直接在主工作树进行。
 - 主工作树允许的操作：`git fetch`、`git pull --ff-only`、`git merge --ff-only`、`git push`（推送合并后的 main）、发版 tag（`git tag` 打在合并后的 main 上再推送）、`git worktree add|list|remove`、`git branch -d`（清理已合并分支）以及只读命令（`status`/`log`/`diff`/`show`/`describe`…）。
 - 主工作树禁止的 git 写操作：`commit`、`checkout`、`switch`、`reset`、`rebase`、`cherry-pick`、`stash`、非 `--ff-only` 的 `merge`、新建/改名/非 `-d` 删除的 `branch`、推送非主干分支（见下条）。
-- **开发分支（feature/fix/refactor 等）一律禁止推送到远程**：分支只在本地 Worktree 生命周期内存在，合并进主分支后即删除。任何情况下不执行 `git push origin <开发分支>`（含 `-u` / `--set-upstream`）；`git push` 仅允许推送合并后的主分支（dsh-plugins 额外允许 `alpha` 版本分支）与发版 tag。远程仓库只应存在主干分支与 CI 自动创建的分支（dependabot 等）；发现远程出现开发分支即为违规，须先合并或确认丢弃，再删除远程分支。
+- **开发分支（feature/fix/refactor 等）一律禁止推送到远程**：分支只在本地 Worktree 生命周期内存在，合并进主分支后即删除。任何情况下不执行 `git push origin <开发分支>`（含 `-u` / `--set-upstream`）；`git push` 仅允许推送合并后的主分支（个别项目经用户批准可例外）与发版 tag。远程仓库只应存在主干分支与 CI 自动创建的分支（dependabot 等）；发现远程出现开发分支即为违规，须先合并或确认丢弃，再删除远程分支。
 - 主工作树存在未提交改动且挡住合并时：若改动内容已逐字节确认完整存档进待合并分支，允许清理这些文件（`git restore <paths>`）；否则先与用户确认处置方式，不得擅自丢弃。
+- **修复敏感性验证（改坏 → 断言失败 → 恢复）的恢复步骤用 `cp` 备份，禁止用 `git checkout <file>` / `git restore <file>` 撤销探测**：探测点尚未提交时，这两条命令会把文件回退到 HEAD，直接丢掉本次全部改动（2026-10-16 在 worktree 内实测踩到，只能整份重做编辑）。恢复统一写 `cp /tmp/<name>.bak <file>`，并在探测后 `git diff --stat` 确认改动仍在。
+- 探测脚本要保证「编译通过但行为退化」，否则 build failed 会掩盖真正的断言失败（例：把参数改成空串时顺手留下未使用变量 → Go 报 declared and not used，看不到测试断言）。
 - 每条并行线一个 Worktree，互不干扰；Worktree 内可自由 rebase/reset/amend 整理历史。
 - Worktree 位置：项目根 `.worktrees/<分支名>`（已 gitignore），避免污染主仓库 git status；基线除非用户指定，一律基于本地主分支创建（`git worktree add -b <分支名> .worktrees/<分支名> main`），创建前确认主分支已同步到最新。
 
@@ -27,10 +29,15 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
    - `git worktree remove .worktrees/<分支名>`，再 `git branch -d <分支名>`（必须先 remove 再 -d，分支被 worktree 占用时无法删除；可先 `git branch --merged main` 做防御性确认）；
    - 若 `worktree remove` 因存在未跟踪文件失败，先检查是否为需要保留的产物（`.workwork/` 中间产物默认可丢弃），再决定是否 `--force`。
 4. 推送在主工作树进行：`git push`（推送合并后的 main）；发版 tag 打在合并后的 main 上再推送。Worktree 内的 commit 不直接 push，开发分支也不推远程建立跟踪——只有合并进主分支的更改才推送。
+5. **改动必须写在 worktree 内的路径上**（2026-10-19 实测踩坑）：会话 cwd 是主工作树，edit/write 工具按该 cwd 解析相对路径——在 worktree 会话里用「主树路径 / 无前缀相对路径」改文件，会把改动落在**主检出**；随后在 worktree 内 `git commit` 得到 `nothing to commit`（改动仍在主树未提交，且 worktree 一旦删除，主树那份就成了游离改动）。规则：
+   - 动手前 `pwd` 确认；改文件一律用 **worktree 绝对路径**（`<repo>/.worktrees/<name>/...`）；
+   - `git add -A` 后先看 `git status --short` 与 `git diff --stat` **非空**再 commit；空则立刻查是不是改到了主树；
+   - 已经改错时：把主树那份改动复制进 worktree 正常提交，然后 `git checkout -- <path>` 还原主树（**不要**在主树提交——那是 Git 红线），并在提交信息里如实记录。
+   - **验证侧的对称坑（2026-10-24 实测）**：worktree 改完后，所有核对命令（`git status`/`git diff`/`grep`/`sed`）若不带 workdir/`cd`，看到的是**主树**——会把已完成的改动误判为「没生效」，也会把主树的旧内容误当 worktree 现状，来回排查浪费时间。规则：worktree 会话里每条核对命令都必须显式带 workdir 或命令开头 `cd <worktree>`；以 worktree 内 `git diff` 为唯一事实源，不要靠记忆拼凑多轮输出。
 
 ### Commit 格式
 
-- 格式：`<分类>(<范围>): <中文描述>`；分类：新增 / 修复 / 重构 / 文档 / 测试 / 样式 / 性能 / 构建 / 持续集成；范围可选（中文，如"战斗"、"认证"）。项目有既定惯例（如 dsh-plugins 的 `新增:` 冒号式）时，以项目 AGENTS.md 声明为准。
+- 格式：`<分类>(<范围>): <中文描述>`；分类：新增 / 修复 / 重构 / 文档 / 测试 / 样式 / 性能 / 构建 / 持续集成；范围可选（中文，如"战斗"、"认证"）。项目有既定惯例时，以项目 AGENTS.md 声明为准。
 - 提交末尾标注实际使用的 AI 模型名：从当前会话 system prompt 末尾获取真正背后运行的模型名，而非笼统的助手名；禁止凭记忆填写过往会话的模型名，每次 commit 前重新确认。
 
 ```
@@ -41,7 +48,7 @@ Model: <模型名>
 
   **临时文件必须落在被 gitignore 的目录内（2026-10-11 实测）**：写 `.workwork/commit-msg.txt`（目录整体被忽略）是安全的；写成同前缀的**根目录文件** `.workwork-commit-msg.txt` 只差一个 `/`，却不在忽略规则内——`git add -A` 会把它一路带进提交，且因为每次 commit 后 `rm`、下次又新建，会**连续多个提交**都夹带它，直到有人发现。判据：临时文件路径的**父目录**必须出现在 `.gitignore` 里，不能只靠文件名前缀相似。
 
-### 版本号以 tag 为源（发版项目，源自 media_app 实战）
+### 版本号以 tag 为源（发版项目，实战）
 
 - 版本号只由 git tag（`vX.Y.Z`）决定：构建期用 `git describe` 读取派生，禁止手改版本文件；打完 tag 即“自动更新版本”，无需改任何文件。
 - 标准四步（代码改完、发版前执行）：
@@ -113,7 +120,7 @@ done
 
 - `git push` 成功 ≠ CI 通过。tag/分支推送后用 `gh run list --limit 3` 核对结论；
   需要失败日志时直接 `gh run view <id> --log-failed`
-  （`~/.cache/gh` 已由 sandbox-extra-roots 放行，2026-10-14；未配插件的机器用旧 workaround：`XDG_CACHE_HOME=<workspace>/.workwork/cache` 前缀重定向——gh 的日志缓存默认写 `~/.cache/gh`）。
+  （`~/.cache/gh` 已由 sandbox-extra-roots 放行；报 EPERM 就把该目录加进插件配置，见 `sandbox-adaptation`）。
 - CI 长期红会被「上次也是红的」麻痹成常态：AnyDLNA 的 Linux CI 因
   `TestBundledToolDirFrom` 缺平台门控自 2026-09-20 起连挂 5 次（含纯文档提交）才被发现。
   看到连续失败必须先修再发，不许带红 tag 发布。
@@ -123,7 +130,8 @@ done
   payments have failed or your spending limit needs to be increased」导致私有仓库
   Actions 全部 3-13s 即败。**现行策略（用户已定：不再充值）：碰到该注解的失败
   直接忽略，不 rerun、不排查、不当发布阻塞；正确动作只有一个——把仓库转 public
-  走标准 CI**（public 仓库 Actions 免费不限额，hotspot 已于同日转 public 并核实）。
+  走标准 CI**（public 仓库 Actions 免费不限额；已在该项目转 public 后核实）。
   **不要走「私有仓库本地构建发版」的替代路径**——该兜底流程已被本策略废弃，
-  不再维护其操作细节（历史做法见 git 历史 2026-10-10 hotspot v1.3.2 前后的提交）。
+  不再维护其操作细节（历史做法见对应仓库的 git 历史；具体时间点/版本号属项目事实，
+  写在项目侧文档，不记在本 skill）。
   除 Billing 注解外，CI 失败仍按上两条处理，不得借本条豁免其他红灯。
