@@ -1,2 +1,3 @@
 .workwork/
 .worktrees/
+*.bak-*
