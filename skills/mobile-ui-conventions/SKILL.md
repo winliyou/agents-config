@@ -8,7 +8,7 @@ description: 移动端与 TV 端 UI 通用约定（跨 ArkUI / Compose / Android
 跨项目、跨技术栈通用的界面约束（ArkUI/ArkTS、Jetpack Compose、Android TV、HarmonyOS）。
 **具体 token 名、档位表、组件与主题体系见各项目自己的 skill**，本文件只记与项目无关的硬性约束。
 
-这些约束在 `media_app`（Kotlin/Compose，TV）与 `music_app`（ArkTS/ArkUI，手机）两个不同仓库、不同技术栈中被**独立重复验证过**——属平台级常识，故上提到用户级。
+这些约束在多个不同仓库、不同技术栈（Kotlin/Compose 的 TV 端、ArkTS/ArkUI 的手机端）中被**独立重复验证过**——属平台级常识，故上提到用户级。
 
 ## 1. 可操作面积不能小于触控下限
 
@@ -55,7 +55,7 @@ description: 移动端与 TV 端 UI 通用约定（跨 ArkUI / Compose / Android
 - 强调色全项目唯一，不新增不一致的强调色；文字层级用固定的灰阶分级。
 - accent 底色上的前景元素用固定的 `on_accent` 类色，不要复用 ink 底色。
 
-## 8. 跨端通用：窄视口卡片文本逐字竖排（Web/CSS 实测，2026-09 CNM 项目）
+## 8. 跨端通用：窄视口卡片文本逐字竖排（Web/CSS 实测，2026-09）
 
 > 本节虽是 Web/CSS 案例，但坑位在「窄视口（手机真机尺寸）」才暴露，故暂寄本 skill；纯 Web 项目读到此节同样适用。
 
