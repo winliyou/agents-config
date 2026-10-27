@@ -7,7 +7,13 @@ description: 浏览器自动化安全约定与防弹窗红线（本机）：优�
 
 **任何浏览器自动化动手前先读本节。** 这是本机约定，与 `agent-browser` 工具自带的 skill（工具用法）互补：那个讲怎么用，这个讲怎么**不打扰用户**。
 
-**工具选择**：一律优先用 `agent-browser` 而非内置网页工具或其他浏览器自动化方案（它是本机已配置、已验证的那套）。工具用法先 `agent-browser skills get core`。
+**工具选择（2026-10-21 用户明确要求 · 硬红线）**：**浏览器自动化与自动化测试必须走 `agent-browser`**，禁止自研脚本/Playwright/CDP 脚本直接 spawn Chrome 二进制。三条理由：
+① 只有 wrapper 路径内置 `~/.agents/bin/chrome-guard`——它防止 headless 实例独占 `com.google.Chrome` 的 LaunchServices 身份、导致用户点 Dock 图标/右键新建窗口全部无反应（详见文末「用户日常 Chrome 的 Dock 身份劫持」）；
+② 2026-10-20 取证：当天所有劫持用户 Chrome 的 headless 实例**全部来自项目自研脚本**（某前端项目 / 某项目 等），agent-browser 一次都没被用过；
+③ wrapper 的解释器 bug 已于 2026-10-21 修复（见文末「wrapper exit 127 修复」），冷启动 1.9s、热路径约 250ms，**不存在"太慢所以绕开"的理由**。
+工具用法先 `agent-browser skills get core`。
+
+**存量例外登记（2026-10-27 全库审计）**：两个仓库内 E2E 测试套件仍在用 Playwright（自带 Chromium、headless、未接日常 Chrome）——按本红线属**历史遗留待迁移**，迁移由各项目会话自行安排；**新项目/新套件一律直接用 agent-browser，不得新增 playwright/puppeteer 依赖**。迁移前风险可控的依据：自带 Chromium 与日常 Chrome 的 bundle 身份无关，不触发弹窗与 Dock 劫持；但**不得改用 `channel: "chrome"` 接系统 Chrome**（那会落入本红线管辖）。
 
 **关键点：本节约定与本机 `~/.agent-browser/config.json` 共同生效——不要绕过配置文件去手写 env。**
 
@@ -34,7 +40,7 @@ socket 与状态落点：`~/.agent-browser/*.sock`；默认目录不可写时 wr
 - **正常用法就是什么都不加**：`agent-browser <命令>` 即自动成为本会话的房客，天然隔离。**不要**为了"隔离"而手写 `tab new` 或改 session。
 - **不要传 `--cdp`**：wrapper 已注入。漏传/自传都会破坏绑定（`--cdp` **不是 sticky**——实测漏传一次该 session 就掉回 owner 并顶掉别人页面）。
 - **跑批 / 长会话劣化**：用独立实例 `AGENT_BROWSER_GLOBAL_SESSION=<项目固定名> agent-browser <命令>`（自带 `profiles/<名>`），用完 `agent-browser --session <名> close` 即还。
-- **显式 `--session` / `--profile` 一律尊重**（如 fft_cover 的 `--profile auto`），既有项目用法不受影响。
+- **显式 `--session` / `--profile` 一律尊重**（如 某前端项目 的 `--profile auto`），既有项目用法不受影响。
 - **任务中途不要重建 owner daemon**（等待用 `--default-timeout` / `wait` / `eval` 轮询，绝不靠 kill 重启；owner 重建会使所有房客绑定失效，wrapper 会清掉它们，但当前任务该重开就重开）。
 - 需要退回旧的 shared 单例行为：`AGENT_BROWSER_GUEST_MODE=0`。
 
@@ -50,9 +56,11 @@ socket 与状态落点：`~/.agent-browser/*.sock`；默认目录不可写时 wr
 **wrapper 现行机制**：
 
 - **close 硬闸**：仅拦**显式 `--session shared`** 与 `close --all`（一律），exit 1 并提示正确做法；**房客 `close` 放行**（属合法自清理）。逃生门 `AGENT_BROWSER_ALLOW_CLOSE_SHARED=1`，仅确认无其他会话正在使用时用。
-- **空闲回收禁用**：默认注入 `AGENT_BROWSER_IDLE_TIMEOUT_MS=0`（env 名以 README Options 表为准，`_MS` 结尾，勿凭记忆写成 `IDLE_TIMEOUT`）；调用方显式传 `--idle-timeout` 或同名 env 时不覆盖。仅 owner 禁用；房客 daemon 1h 自退、下次按 targetId 重挂。
+- **空闲回收禁用**：默认注入 `AGENT_BROWSER_IDLE_TIMEOUT_MS=0`（env 名以 README Options 表为准，`_MS` 结尾，勿凭记忆写成 `IDLE_TIMEOUT`）；调用方显式传 `--idle-timeout` 或同名 env 时不覆盖。仅 owner 禁用。
+  **2026-10-16 重大更正**：房客 daemon 也**不会 1h 自退**——房客走 `--cdp` attach，属上游"user-attached browsers"，**豁免空闲回收**（实测 `manual-*` daemon 存活 3h+ 仍健在）。旧文"房客 daemon 1h 自退、下次按 targetId 重挂"与实现不符，勿再采信。后果：房客的标签只能靠显式 `close`（wrapper 会先摘标签）或下方孤儿 tab 兜底清理回收，别等 daemon 自退。
 - **标签与状态不泄漏**（2026-10-15 修复）：close 前先摘掉该会话的 pinned tab，close 成功后再清残留状态文件（`.target`/`.config`）。**判别房客的依据**是该 session 的 daemon 是否 ESTABLISHED 连着 owner 端口——独立实例（自带 Chrome）不摘标签，它的标签随自己的 Chrome 消失。显式 `--session <房客名> close` 同样受此清理（修复前会泄漏标签并留下 `.target`）。
 - **孤儿状态文件兜底清理**：房客 daemon 若自行退出（空闲回收、被 kill），不会带走 `.target`/`.config`——实测曾累积 28 组。wrapper 每次调用会清掉"无活跃 socket **且**进程不存活"的会话状态文件；两个条件同时满足才删，active 会话与 owner 不受影响。
+- **孤儿 tab 兜底清理（2026-10-16 新增，`~/.agents/bin/ab-reap-tabs.mjs`）**：状态文件清了，**标签却没人关**——这是 2026-10-16 实测"一夜累积 37 个标签（16 个 about:blank）"的根因链：① 无 `DSH_SESSION_ID` 的调用经 wrapper `manual-<ppid%1e6>` 兜底**每次调用都是新会话**（即下方 session 漂移坑；它不只丢 tab 绑定，还会持续新开标签；**2026-10-16 晚已修**：兜底名改为 `manual-<sha256("cwd:"+cwd)[:8]>`，同目录复用同一房客——实测 某前端项目 同目录三条命令只 1 个会话 1 个 daemon。代价——**用户已确认接受（2026-10-16：不需要同一会话内多自动化并发）**：同目录并发时共用一个标签，真出现再显式拆 `--session`）；② 房客 daemon 永不自退（见上条更正）；③ 会话结束无人 `close`；④ 旧兜底只删状态文件不删标签。wrapper 现于**房客模式下每至多 1h**（`~/.agent-browser/.last-tab-reap` 节流）派发一次独立清理进程：**只关 `about:blank` 与无对话内容的 `gemini.google.com/app` 新对话页**，有内容的对话页绝不碰；owner 与调用者会话（经 `AB_REAP_PROTECT_SESSIONS` 传递）受保护。即使误关活会话的标签也无损失——下次调用按 `tab_gone` 自动重绑。**残余风险**：其他并发会话若在新对话页里打了草稿还没发送，草稿会随标签一起没（低概率，已知取舍）。手动跑：`node ~/.agents/bin/ab-reap-tabs.mjs [--dry-run]`——**别在会话中途裸跑**（不带保护 env 时不保护调用者自己，实测关掉过自己的标签）。
 
 **`tab_gone` 现由 wrapper 自动自愈**（2026-10-15 修复）：自己钉的 tab 被关掉后，上游报
 `tab_gone: bound tab is gone (…, last url …)`——**exit 1，只写 stderr，且不会更新 `.target`**（修复前该会话就此永久卡死，后续每条命令都失败）。
@@ -93,7 +101,9 @@ wrapper 检测到即按 `.target` 里的 lastUrl 自动重绑并重试一次（�
   ① `HOME` 为 **undefined** → wrapper `REAL = HOME + "/.bun/install/global/..."` 拼出 `/.bun/...` ENOENT；
   ② `PATH` 残缺（缺 `/usr/bin:/bin:/usr/sbin:/sbin`）→ wrapper 依赖的 `lsof`/`pgrep`/`pkill`、bun/node 解释器、ohpm 脚本依赖的 `sed`/`dirname`/`uname` 全部 ENOENT（表象：莫名 exit 126/127 与 "command not found"，极易误判为工具坏了）；
   ③ 无 `DSH_SESSION_ID` → wrapper 房客名退化为 `manual-<ppid%1e6>`，而 run_code 每次调用的 pid 不同 → **每条命令都是新房客**，看不到自己上一条钉的 tab（表象：open 成功后下一条 get url 变 about:blank、snapshot ref 全部 Unknown ref——像"tab 丢失"，实为 session 漂移）。修法：env 显式传**固定** `DSH_SESSION_ID`。
-  验证可用的 spawn env：`{ ...process.env, HOME: "/Users/liyou", DSH_SESSION_ID: "<项目固定名>", PATH: "/Applications/DevEco-Studio.app/Contents/tools/node/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" }`。
+  **2026-10-16 已修**：兜底名改为 `manual-<sha256("cwd:"+cwd)[:8]>`（对调用方工作目录稳定），同目录的调用复用同一房客、同一标签，不再每命令漂移；跨项目目录依旧隔离。
+  **取舍已由用户确认（2026-10-16）**：不需要"同一会话内多自动化并发"——同目录调用共用一个会话/一个标签、**顺序复用**即为预期行为，不要当 bug 修，也不要为此加并发拆分。排查共用（仅在怀疑时）：`lsof ~/.agent-browser/<会话名>.sock`，调用方进程数 >1（除 daemon 自己）才说明存在共用——2026-10-16 检查 7 个存活会话均为 1，无共用。真出现并发共用时，再给相关调用显式拆 `--session`。
+  验证可用的 spawn env：`{ ...process.env, HOME: "$HOME", DSH_SESSION_ID: "<项目固定名>", PATH: "/Applications/DevEco-Studio.app/Contents/tools/node/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" }`。
 
 ### 静默运行：默认 headless，绝不抢用户焦点（2026-10-15 重写）
 
@@ -121,6 +131,7 @@ wrapper 检测到即按 `.target` 里的 lastUrl 自动重绑并重试一次（�
 **已知取舍**：headless 下真实浏览器可能识别无头特征（creepjs 类检测）；有 GUI 需求的站点（WebRTC 设备、部分 WebGPU 截图）在 headless 受限。**需要真窗口时**由调用方显式 `AGENT_BROWSER_HEADED=1`——但那会抢焦点，须先确认用户可被打扰。**不要**用 init-script 篡改 `navigator.webdriver`（可被 creepjs 类 lie 检测抓到）。
 
 - **验证前台占用禁止用 `osascript` + System Events**：会卡辅助功能授权弹窗（本身就是打扰，且拖死执行超时）。用 `lsappinfo front` + `lsappinfo info -only name <ASN>`，纯 CLI 无权限问题。
+- **2026-10-22 重要补充：抢焦点还有第二个源头 —— `chrome-guard` 误判后对已运行的 Chrome 执行 `open`。** headless 本身不抢焦点（上面已验证），但 wrapper 每次调用前跑的 Dock 守卫若判定失效，就会 `open -g -a "Google Chrome"`；`open` 对**已运行**的 app 等于激活窗口，实测 2.1s 后把前台从用户正在用的应用切到 Chrome。判定正则已于 2026-10-22 修复，详见「抢焦点事故：chrome-guard 判定正则失效」节。排查「频繁抢焦点」时**先查这条**（`~/.agents/bin/chrome-guard --check` 应为 exit 0），不要只看 headed/headless。
 - **daemon 启动参数在首启时固化**：改了 headed/args/profile 后**必须重建 owner 才生效**——否则旧 daemon 会一直用旧配置跑（本次抢焦点问题在重建前一直存在）。重建前确认没有其他会话正用着，用 `AGENT_BROWSER_ALLOW_CLOSE_SHARED=1 agent-browser close`（普通 `close` 会被硬闸拦）；重建会使所有房客绑定失效，wrapper 会自动清掉它们。**重建会关掉当前所有标签**，动手前先看 `tab list` 并告知用户。
 
 ### 沙盒自适应（**历史机制，2026-10-14 晚已从 wrapper 移除**；现行唯一路径 = 提权原生启动，见「复用铁律·提权执行」）
@@ -134,7 +145,7 @@ wrapper 检测到即按 `.target` 里的 lastUrl 自动重绑并重试一次（�
 DSH 的 `workspace-write` 沙盒只允许写会话工作区，会让 agent-browser **两级失败**（2026-09-25 实测）：
 
 1. socket 目录 `~/.agent-browser` 不可写 → daemon 起不来
-   （`Socket directory '/Users/liyou/.agent-browser' is not writable`）；
+   （`Socket directory '$HOME/.agent-browser' is not writable`）；
 2. Chrome 启动失败（`Failed to initialize sandbox` / `GPU process isn't usable`）
    ——根因是 **Chrome 内层沙盒与 DSH 外层沙盒嵌套冲突**，不是显存/GPU 问题。
    对照实验：**只加 `--no-sandbox` 即成功**；只加 `--disable-gpu` 仍失败
@@ -148,11 +159,11 @@ DSH 的 `workspace-write` 沙盒只允许写会话工作区，会让 agent-brows
 | `--profile` | Chrome profile（否则写 `~/Library/Application Support` 被拒） | 可写目录下 `chrome-profile/` |
 | `AGENT_BROWSER_ARGS=--no-sandbox` | 关掉 Chrome 内层沙盒，解决嵌套冲突 | **仅在已有外层沙盒时注入**（见下） |
 
-**（已废弃，2026-10-14 晚）** 下述重定向行为曾是旧 wrapper 的自动逻辑，现已移除：保留此段仅为解释旧会话在 `TMPDIR/agent-browser-sandbox/` 留下的目录痕迹。**注意该机制的副作用**：所有受限会话被重定向到**同一个** `$TMPDIR/agent-browser-sandbox/chrome-profile`——形式上跨会话「共享」，实为副产品：不持久、且多 session 并发起 Chrome 会争同一 user-data-dir 触发 SingletonLock 冲突（文末 fft_cover 的 SingletonLock 坑很可能根源在此）。现行方案（统一 `profiles/main` + 提权原生启动）正是为消除该副作用。
+**（已废弃，2026-10-14 晚）** 下述重定向行为曾是旧 wrapper 的自动逻辑，现已移除：保留此段仅为解释旧会话在 `TMPDIR/agent-browser-sandbox/` 留下的目录痕迹。**注意该机制的副作用**：所有受限会话被重定向到**同一个** `$TMPDIR/agent-browser-sandbox/chrome-profile`——形式上跨会话「共享」，实为副产品：不持久、且多 session 并发起 Chrome 会争同一 user-data-dir 触发 SingletonLock 冲突（文末 某前端项目 的 SingletonLock 坑很可能根源在此）。现行方案（统一 `profiles/main` + 提权原生启动）正是为消除该副作用。
 
 **若重定向仍不够用 → 直接请求更宽松权限（正当路径，不必纠结）**：对**单条命令**申请 `danger-full-access` 即可，harness 会把请求作为审批呈现给用户。典型场景：
 - 必须保留 Chrome 原生沙盒而非 `--no-sandbox`；
-- 必须访问**工作区外**的既有 profile（复用已登录态，如 `~/.agent-browser/cnm-gemini`、CNM 的 `cnm-gemini` Chrome profile）；
+- 必须访问**工作区外**的既有 profile（复用已登录态，如 `~/.agent-browser/<项目>-<用途>` 这类按项目命名的 Chrome profile）；
 - 工具路径硬编码、无任何可重定向的配置面。
 
 不要因为"提权要审批"就卡死或放弃功能——**先问再放宽是被鼓励的，「自己悄悄绕开」才是禁止的**。
@@ -184,7 +195,7 @@ DSH 的 `workspace-write` 沙盒只允许写会话工作区，会让 agent-brows
 
 ### 目录重定向对 Chrome 无效的边界（避免走弯路）
 
-实测确认**重定向 HOME 无效**：macOS Chrome 用 `NSHomeDirectory()` 定位配置目录，**不读 `HOME` 环境变量**（`HOME=/tmp/x` 后仍去写 `/Users/liyou/Library/...`）。同理 `--crash-dumps-dir` / `--disable-gpu-sandbox` / `--no-zygote` 都不能替代 `--no-sandbox`。
+实测确认**重定向 HOME 无效**：macOS Chrome 用 `NSHomeDirectory()` 定位配置目录，**不读 `HOME` 环境变量**（`HOME=/tmp/x` 后仍去写 `$HOME/Library/...`）。同理 `--crash-dumps-dir` / `--disable-gpu-sandbox` / `--no-zygote` 都不能替代 `--no-sandbox`。
 
 **且这些都与目录无关**——报错原文是 `sandbox initialization failed: Operation not permitted`，是 `sandbox_init()` 被外层策略拒绝，不是路径不可写。**所以不要试图靠重定向目录来避免 `--no-sandbox`，要按上面的环境判定来处理。**
 
@@ -213,7 +224,7 @@ DSH 的 `workspace-write` 沙盒只允许写会话工作区，会让 agent-brows
 
 ## 严禁事项（红线）
 
-1. **禁止抢焦点 / 置顶窗口**：不得调用任何 OS 级窗口激活（如 AppleScript `activate`）或置顶行为，不得打断用户的键鼠输入。
+1. **禁止抢焦点 / 置顶窗口**：不得调用任何 OS 级窗口激活（如 AppleScript `activate`、`open -a` 对已运行应用）或置顶行为，不得打断用户的键鼠输入。**注意 `open -g` 不等于安全**：它只让冷启动不进前台，对已运行的 app 仍会激活窗口（2026-10-22 实测）。
    **默认 headless 就是为守住这条**：headed 会在启动瞬间抢走焦点（窗口移屏外/最小化都无效）。**禁止把默认改回 headed**；确需真窗口要先确认用户可被打扰。
 2. **禁止强切用户当前活动标签页**：用户可能正在前台浏览或观看视频，严禁调用 `set active tab` 或粗暴切走其活动页面。
 3. **禁止 `--auto-connect` / `--cdp 9222` 连用户日常 Chrome**（除用户明确要求）：外部 CDP attach 会让 Chrome 弹「有应用正在请求远程控制」，且**每次重连都会再弹一次**。
@@ -241,18 +252,33 @@ agent-browser --auto-connect <命令>          # 等价：AGENT_BROWSER_CDP=9222
 - **daemon 僵死**：仅在确认 daemon 彻底无响应且非网络等待时，才允许**单次** `pkill -f agent-browser-darwin-arm64`；严禁写进任何重试循环。
 - **首启竞态**：首次 `open` 后立即取标题可能为空（Chrome 首启慢），重试一次即可。
 - **Chrome 异常退出后 SingletonLock 残留**：上一轮 Chrome 崩溃/被杀后，profile 目录残留 `SingletonLock` 等锁文件，后续启动报 `Failed to create .../SingletonLock: File exists` → `ProcessSingleton ... Aborting`。
-  辨别特征极具误导性：`open` 可能仍打印「✓ 页面标题 + URL」造成成功假象，但紧接的 snapshot/eval 全报 `CDP response channel closed`——**先删该 profile 下的 `Singleton*`（或整个 profile 目录）再重开**，清锁后再排查别的。两会话独立实测确认（本机 + hotspot 会话，2026-09-25）。
+  辨别特征极具误导性：`open` 可能仍打印「✓ 页面标题 + URL」造成成功假象，但紧接的 snapshot/eval 全报 `CDP response channel closed`——**先删该 profile 下的 `Singleton*`（或整个 profile 目录）再重开**，清锁后再排查别的。两会话独立实测确认（本机双会话，2026-09-25）。
 - **代理**：本机已设 `no_proxy=localhost,127.0.0.1,::1`，直连本机 CDP 端口无需 `--noproxy`（历史提示已过时）。
 
-### 专用实例直连 CDP（自研管线，如 gemini-gen）
+### 自研 CDP 管线：已全部废止（2026-10-21）
 
-自研 CDP 管线不走 agent-browser，但沿用同一套隔离原则：
+**2026-10-21 用户明确要求后，已实测验证并删除全部自研管线**：不再允许自行 spawn Chrome、不管理 CDP 端口/daemon/profile。
 
-- **先查清监听者是谁再连**：`lsof -iTCP:9222 -sTCP:LISTEN` 只说明有 Chrome 在监听，不说明可以连；再 `lsof -p <pid>` 看打开文件——落在 `~/Library/Application Support/Google/Chrome/Default/` 就是用户日常 Chrome，**直接换独立实例，不要连**（2026-09-25 实测：gemini-gen 旧管线直连 9222 导致每次重连都向用户弹「请求远程控制」，已迁移到独立实例）。AI 会话沙盒常禁 `ps`（报 `/bin/ps: Operation not permitted`），用 lsof 取证。
-- **独立实例三要素**：独立 user-data-dir + 独立端口（如 9223）+ 常驻 daemon 单连接复用（断线退避自愈，严禁 kill/重连循环——同弹窗红线 4）。
-- **Chrome 111+ 握手细节**：browser WS 只认 `/json/version` 返回的带 UUID `webSocketDebuggerUrl`（`/devtools/browser` 短路径 404）；WS 请求带 `Origin` 头会 403；日常 Chrome（默认 profile）对 `/json/version` HTTP 端点返回 404 属正常，独立 profile 返回完整 JSON。
-- **共享 owner Chrome 既有 CDP 端口直连（2026-10-15 实测，hotspot UI 审查流水线）**：与上条「自带 Chrome spawn」互补的免提权路径——**不 spawn 新浏览器、复用 owner 已有登录态**。步骤：`lsof -iTCP -sTCP:LISTEN -nP | grep Google` 找 owner（pid 对应 `--user-data-dir=…/profiles/main`）的动态调试端口 → `/json` 列 tab、`PUT /json/new?<url>` 开**自己的新 tab**（绝不 attach 他人 tab）→ Node 原生 WebSocket → `Input.dispatchMouseEvent` 真实鼠标（**合成 DOM 事件 isTrusted=false 会被 Gemini/Angular 静默忽略——这是合成事件点菜单/发送全部扑空的根因**）→ `DOM.setFileInputFiles` 注入附件（比 upload 命令可靠）→ `Page.captureScreenshot` → `/json/close/<id>` 收尾。全程零 home 写入，workspace-write 沙盒内可跑，**提权审批无人应答时的首选**。坑：Gemini「上传和工具」按钮比编辑器晚约 5s 渲染，editor ready 后直点会扑空；模型状态读「打开模式选择器」aria-label（Flash-Lite=配额耗尽标志）。完整可运行样例：hotspot `.workwork/chrome-shot/cdp-round.mjs`。
-- **agent-browser daemon 整条路线不可用时的兜底：Node 直连 CDP 一发命中（2026-10-14 实测，dsh-plugins 适配验证）**。当日 daemon 路线三连败：①提权审批无人应答时 client 调用**挂到执行超时而非快速失败**（连挂 3 次，每次烧满 2-3 分钟）；②绕过提权用 `AGENT_BROWSER_HOME`+`AGENT_BROWSER_SOCKET_DIR` 重定向起独立实例（`--no-sandbox` 注入），Chrome **起来又干净退出**（无崩溃报告、`DevToolsActivePort` 已写出、进程消失）；③即便短暂存活，页面也会被导航去第三方站点（同机其他自动化会话的恢复竞态/干扰，fresh profile 也躲不开）。此时别恋战：**自带 Chrome（`--headless=new --remote-debugging-port=0 --no-sandbox --user-data-dir=<mkdtemp 临时目录>`）+ Node 内置 WebSocket** 按 browser WS UUID 直连，`Target.createTarget` → `Target.attachToTarget{flatten:true}` → enable `Page/Runtime/Log`，`Runtime.evaluate` 取 title/innerText、`Runtime.consoleAPICalled`/`Log.entryAdded`/`Runtime.exceptionThrown` 收集报错，结束时 `Browser.close`——单次调用内全流程确定性完成，无 daemon、无跨会话干扰。脚本落盘用完整文件写入，**别在外层模板里嵌 `${label}` 之类插值**（写盘时就被外层吃掉，运行时空匹配还不报错）；表达式拼参用 `JSON.stringify(label)`。
+**验证依据（逐像素对比，非估算）**：
+
+| 场景 | 旧自研管线做法 | agent-browser 替代做法 | 结果 |
+|---|---|---|---|
+| HTML mockup → PNG（桌面 1440×900） | spawn headless + CDP `Page.captureScreenshot` | `open <file://>` + `set viewport 1440 900` + `screenshot` | **逐像素一致（0 处差异）** |
+| HTML mockup → PNG（移动 411×891，需 `mobile:true`） | CDP `Emulation.setDeviceMetricsOverride` | CLI 无等价参数（`set viewport` 会覆盖 `set device`）→ 用 agent-browser 的 `get cdp-url` + 一条 CDP 命令 | **逐像素一致（0 处差异）** |
+
+**移动端正确做法**（唯一需要补 CDP 的场景）：
+
+```bash
+agent-browser open "file:///path/to/page.html"
+CDP=$(agent-browser get cdp-url | tail -1)
+# 通过该端点：Target.getTargets → 按 URL 选 page → attachToTarget(flatten) →
+#   Emulation.setDeviceMetricsOverride {width, height, deviceScaleFactor:1, mobile: width<700}
+#   → Page.captureScreenshot（不要用 agent-browser screenshot，它会重置 emulation）
+```
+
+**注意**：浏览器生命周期、owner、标签、登录态仍全部由 agent-browser 管理；这条 CDP 只是补一条 CLI 缺失的模拟参数，**不属于自研管线**（不 spawn、不管端口、不管 daemon、不进 profile）。
+
+**已删除清单**（备份在 `~/.dsh/backups/selfmade-pipelines-20261021-002707/`）：`某前端项目/.workwork/cpu-r12/*.mjs`（5 个 CPU 探针）、`ui-audit/auto-chrome.sh`（常驻 headless 启动器）、`ui-r12/shot-html.mjs`（HTML→PNG）、`某项目/.workwork/gemini-gen/<项目>-gemini-profile-chrome.plist`（LaunchAgent）；同时停掉 9421/9333/9441/9223 常驻端口、清理 `~/.agent-browser/profiles/{auto,fixg1,isoProbe,myBatch,probe-g1,probe-g2}`。
 
 ## 脚本化使用时（冒烟测试 / CI）
 
@@ -262,7 +288,7 @@ agent-browser --auto-connect <命令>          # 等价：AGENT_BROWSER_CDP=9222
 // ✗ 错误：process.pid 每次不同 → 每次新 session、新浏览器实例
 const SESSION = `smoke-${process.pid}`;
 // ✓ 正确：按项目/用途固定名字，反复运行复用同一实例
-const SESSION = 'travel-smoke';
+const SESSION = 'myapp-smoke';
 ```
 
 任务结束按名字关自己那个：`agent-browser --session <名> close`（**不要** `close --all`）。
@@ -288,7 +314,7 @@ const SESSION = 'travel-smoke';
 - **不要把"抽 ref"和"点 ref"挤在同一条复合命令里**：多步之间会重新快照，
   `$(... | grep -oE '@e[0-9]+')` 常拿到空串 → 点击无效且无报错。取 ref 与点 ref 分两步执行；
   或用上面的 `find` 语义定位，从根上免掉 ref 失效问题。
-- **残留 SingletonLock 导致 Chrome 起不来（2026-10-01 实测，fft_cover 迁入）**：表象
+- **残留 SingletonLock 导致 Chrome 起不来（2026-10-01 实测，某前端项目 迁入）**：表象
   `Chrome exited early (exit code: 21) without writing DevToolsActivePort` + stderr
   `Failed to create .../chrome-profile/SingletonLock: File exists`——根因是上次会话的
   Chrome 临时 profile 残留了 SingletonLock（symlink），与 `--no-sandbox` 无关，
@@ -296,12 +322,12 @@ const SESSION = 'travel-smoke';
   按报错原文里的 profile 路径 `rm -f <profile>/SingletonLock` 后重试（删除前先 `ls`
   确认目录确属 agent-browser 临时 profile）；无需重建 daemon/session。
 - **长会话劣化：同一 session 反复导航/重载后 eval 陆续返回 null（2026-10-13 实测，
-  fft_cover e2e 冒烟）**：表现为最初可用的 eval 在若干次 reload 后开始返回空/null，
+  某前端项目 e2e 冒烟）**：表现为最初可用的 eval 在若干次 reload 后开始返回空/null，
   清 SW/缓存、重开标签只能临时恢复。解法：**跑批类任务用全新 session，跑完即关**
   （`--session <新名>` + close），不要复用跨多轮的老会话；结合上面「session 名必须
   稳定」的规则，这个新名应是项目固定的冒烟专用名，每次运行前先 close 旧实例。
 
-## 用户日常 Chrome 上的 AI 网页自动化（Gemini 等，2026-10-14 实测 fft_cover）
+## 用户日常 Chrome 上的 AI 网页自动化（Gemini 等，2026-10-14 实测 某前端项目）
 
 **前提：仅限用户明确要求操作其日常 Chrome（用其登录态）时使用，即上方红线 3 的唯一例外场景；AI 不得自行选择此模式。** 下文直连 CDP 与 `--auto-connect` 是同一前提的两种入口。
 
@@ -357,9 +383,9 @@ const SESSION = 'travel-smoke';
 不能靠口头纪律，要状态文件硬闸：连接失败写持久标记（如 cdp-state.json result:fail），
 后续调用直接拒绝；结果可复用时（文件已存在）优先复用不重发；全流程合并为单命令，
 整个进程只握手一次。验证方式：写 fail 标记后调用应被拒绝、无连接产生。
-**Chrome 自动化统一单一 profile（2026-10-14 晚用户验收；2026-10-15 起 `profiles/main` 为浏览器 owner 专属，用户命令跑在房客里——见「复用铁律」，fft_cover 的 auto profile 作为显式指定继续有效）**：全部自动化
+**Chrome 自动化统一单一 profile（2026-10-14 晚用户验收；2026-10-15 起 `profiles/main` 为浏览器 owner 专属，用户命令跑在房客里——见「复用铁律」，某前端项目 的 auto profile 作为显式指定继续有效）**：全部自动化
 （截图/e2e/登录态操作）固定用 **一个** profile + 固定 session 名（本项目实例：
-/tmp/fft-agent-profile + session auto），每条调用显式带 --session 与 --profile，
+/tmp/<项目>-agent-profile + session auto），每条调用显式带 --session 与 --profile，
 缺一个就会落到 wrapper 注入的默认临时 profile（假性数据「丢失」）。位置选 /tmp
 而非 home：home 下 Chrome 运行时写入被 DSH 沙盒拒（exit 21，privileged 单命令
 只覆盖那一次执行）；/tmp 已实测可写且全机可达，代价是机器重启后 profile 清空
@@ -394,6 +420,7 @@ const SESSION = 'travel-smoke';
 **0. 目标标签必须在【前台】——这是最难定位的一个（2026-10-15 实测定位）**
 
 Chrome 对**后台标签**节流 `requestAnimationFrame`。Gemini 的 Angular CDK 菜单在后台标签里**不渲染菜单内容**：点击「上传和工具」后按钮的 `aria-expanded` **已经变成 `"true"`**（所以看 expanded 会误判成"菜单已开"），但菜单 DOM 不生成、`input[type=file]` 数量**恒为 0**，`upload` 一直报 `Element not found`。
+
 
 - 实测数据：`document.visibilityState === 'hidden'` 时连点 5 轮，仅约 3 轮 `aria-expanded=true`，且 `inputs` 恒为 0；
 - `agent-browser tab <该标签的 tabId>` 把它切到前台（`visibilityState === 'visible'`）后，**同一次点击立刻拿到 `inputs=3`**。
@@ -439,10 +466,10 @@ agent-browser eval 'var i=document.querySelector("gem-media-attachment img"); i&
 ### 提交与读取回答
 
 - **发送必须用真实点击** `agent-browser click '[aria-label="发送"]'`。`eval "button.click()"` 会返回 sent 但消息**发不出去**（输入框文本原样残留）；`press Enter` 同样无效。发送成功的判据：`.ql-editor` 变空、`[aria-label*=停止]` 出现、附件 chip 消失。
-- **真实点击超时时，CDP 直发 `Input.dispatchKeyEvent` 回车是可靠兜底（2026-10-15 media_center UI 审查实测）**：与上条不矛盾——`press Enter`（经 agent-browser 键入）无效，但经 browser 端 WS 直发 `{type:keyDown/keyUp, key:Enter, code:Enter, windowsVirtualKeyCode:13}` 是 trusted 输入，编辑器有焦点时 Gemini composer 收到即发送。`Input.dispatchMouseEvent` 找不到元素/超时时用它接管。
+- **真实点击超时时，CDP 直发 `Input.dispatchKeyEvent` 回车是可靠兜底（2026-10-15 某媒体项目 UI 审查实测）**：与上条不矛盾——`press Enter`（经 agent-browser 键入）无效，但经 browser 端 WS 直发 `{type:keyDown/keyUp, key:Enter, code:Enter, windowsVirtualKeyCode:13}` 是 trusted 输入，编辑器有焦点时 Gemini composer 收到即发送。`Input.dispatchMouseEvent` 找不到元素/超时时用它接管。
 - **大文本 `Input.insertText` 超时 ≠ 插入失败（同日实测，28.6K 中文字符 + 代码块）**：CDP 调用 30s 超时抛错，但重连后读 `.ql-editor` 的 `textContent.length` 与头尾内容，确认**文本已全部插入**（渲染进程忙于处理大文本，响应没赶回来）。**先查状态再决定是否重试**——盲目重发会让输入内容翻倍。
 - **渲染器迟缓是连锁的（同日实测）**：insertText 超时后紧接着 `Input.dispatchMouseEvent` 也超时（同一渲染进程忙）。此时轻量 `Runtime.evaluate`（20s 超时）始终可用，判障/读状态/兜底发送全走它；`dispatchMouseEvent` 只留给必须真实指针的场景（开菜单、选模型）。后台 gradle 构建抢 CPU 会显著加剧迟缓，审查流水线别与其并发。
-- **大 prompt 整份插入会被重复执行（2026-10-16 media_center UI 审查实测，接上条的反面）**：46KB 单次 `agent-browser keyboard inserttext` 后，`.ql-editor` 里出现 **4 份完全相同**文本（textContent 长度 161,772 ≈ 4×41K 字符）——即这次调用被重试，而**每次都已写入成功**，与上条"超时≠失败"是同一机制的另一面。规避：**先精简再发**（同一份内容改发"增量 diff"版 5.8KB，单份通过、秒级完成）；必须发大文本时**分段插入**，每段后 eval 统计目标串出现次数与总长度，发现多份就重载页面（`open` 同一 URL 会清空 composer 但保留线程）重来。
+- **大 prompt 整份插入会被重复执行（2026-10-16 某媒体项目 UI 审查实测，接上条的反面）**：46KB 单次 `agent-browser keyboard inserttext` 后，`.ql-editor` 里出现 **4 份完全相同**文本（textContent 长度 161,772 ≈ 4×41K 字符）——即这次调用被重试，而**每次都已写入成功**，与上条"超时≠失败"是同一机制的另一面。规避：**先精简再发**（同一份内容改发"增量 diff"版 5.8KB，单份通过、秒级完成）；必须发大文本时**分段插入**，每段后 eval 统计目标串出现次数与总长度，发现多份就重载页面（`open` 同一 URL 会清空 composer 但保留线程）重来。
 - 回答容器：`model-response`（或 `[class*=model-response]`）。轮询其长度，`[aria-label*=停止]` 消失即完成（Argon 高点实测 <1 分钟）。
 - **完成判据不能只看"长度 > N"（2026-10-15 实测踩坑）**：写死 `length > 20` 会让**短回答**白等满全部轮次——实测 Gemini 答"主色调为深绿色和亮绿色。"（13 字符）、"深绿色"（3 字符）、"有"（1 字符）都是正常完整回答。正确判据是三条件并列：① 长度 > 0；② 页面上没有"停止"按钮（`[aria-label*=停止],[aria-label*=Stop]` 计数为 0 = 生成已结束）；③ 长度连续 2 次不变。修正后同场景耗时由 4 分钟降到 28 秒。
 - **必须读 `textContent`，不要读 `innerText`（2026-10-15 实测更正）**：无头浏览器里后台标签的 `innerText` **返回空**——实测 `model-response` 的 `innerText.length` 只有 8（就是 "Gemini 说" 这几个字），而 `textContent.length` 有 513。用 innerText 轮询会**永远判不出回答已生成**，误以为"Gemini 没回答"。此前的"轮询 innerText.length"结论只在前台标签成立。
@@ -463,3 +490,346 @@ agent-browser eval 'var i=document.querySelector("gem-media-attachment img"); i&
 | 干扰用户 | 零（headless） | 会抢焦点/切标签 |
 | 结论 | **默认选这个**；仅当 owner profile 无登录态且用户明确要求时，才走上一节 |
 
+### 多图批量审查流水线补充（2026-10-16 UI 审查实测，8 批 43 图全通过）
+
+- **headless owner 的 tab 必须先设视口**：CDP `Emulation.setDeviceMetricsOverride {width:1440,height:900}` 之后，composer 的「上传和工具」「模式选择器」按钮才会渲染；未设视口时三者全部查不到（modeBtn/uploadBtn/sendBtn 全为 none，脚本报 NO_UPLOAD_BTN）。Gemini 默认窗口下布局塌缩，编辑器虽在但按钮区缺失。
+- **`/app` 打开常停在边栏视图**：`.ql-editor` 存在但 composer 不完整。自愈逻辑：探测 modeBtn/uploadBtn 任一缺失 → 真实点击「发起新对话」（aria-label/文本精确匹配）→ 等 8s 再探测。
+- **附件缩略图就绪 ≠ 服务端处理完成**：`gem-media-attachment img.naturalWidth>0` 后立刻发送，偶发实际发出的是纯文本（回答「我是一个文本 AI，这超出了我的能力范围。」约 21 字符）。发送前额外 sleep 6s，并校验 `gem-media-attachment` 数量 === 图片数。
+- **回答长度 <50 字符 = 附件未带上的强信号**，直接整轮重试（新对话）而不是继续等。
+- **模型守卫实测**：Argon 配额耗尽时，菜单切回 Argon 多次尝试均失败（自动回退 Flash-Lite）——接受 Flash-Lite 可正常完成多图 UI 审查（本日 8 批全部产出有效审查，单批 1-6 图、回答 2-5.5K 字符）。
+- 连续开多个新对话 tab 无弹窗问题（owner 独立 headless），但偶发菜单 file input 不渲染（rAF 节流）——直接整轮重试即可。
+
+
+
+
+## 用户日常 Chrome 的 Dock 身份劫持（2026-10-20 实测定位，必读）
+
+**症状**：点 Dock 上的 Chrome 图标没反应；右键「新建窗口」也无效；`open -a "Google Chrome"` 返回 -600（procNotFound）或 exit 0 但什么都没发生。用户表现为「Chrome 用不了了」。
+
+**根因（不是 agent-browser 的 bug，是 macOS LaunchServices 语义）**：agent-browser / 自研脚本用 `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` 这个**真实二进制**起 headless（刻意如此：UA/指纹/登录态与日常 Chrome 一致，反爬站点不拒绝——**不要为此改用 Chrome for Testing，用户明确拒绝，很多站点会检测并拒绝登录**）。但 LaunchServices 按 **CFBundleIdentifier** 判定「这个 app 是否在运行」，**与 profile / user-data-dir 完全无关**。于是任何用同一 Chrome.app 起的 headless 实例都会被登记成 `com.google.Chrome` 的一个实例：
+
+- 用户 Chrome 开着时：GUI 实例 `type="Foreground"`，headless `type="BackgroundOnly"` —— Dock 点击激活 GUI，**完全正常**（2026-10-20 实测）；
+- 用户 Chrome 没开、只有 headless：headless 成为唯一的 `com.google.Chrome` 实例（且可能是 Foreground），点 Dock 只会去「激活」这个没有窗口的进程 —— **表现为点了没反应**。这才是用户报障时的真实状态（取证：用户 profile 下无 Singleton* 文件 = GUI 未运行）。
+
+**判据（沙盒内可用的取证命令，不要用 ps——沙盒常禁）**：
+```bash
+lsappinfo list | grep -A6 '"Google Chrome"' | grep -E 'pid =|type='
+# type="Foreground"  = 真实 GUI 实例（Dock 能被正常响应）
+# type="BackgroundOnly" = headless 自动化实例（无窗口）
+ls -a "$HOME/Library/Application Support/Google/Chrome/" | grep -i singleton
+# 无 Singleton* = 用户 GUI Chrome 当前没运行 → 此刻起 headless 就会劫持 Dock
+```
+
+**修法：`~/.agents/bin/chrome-guard`（2026-10-20 落地）**。启动任何 headless 实例**之前**先跑它：
+
+```bash
+~/.agents/bin/chrome-guard          # 幂等；GUI 已存在 <50ms 返回；不存在则 open -g 后台拉起并等注册
+~/.agents/bin/chrome-guard --check  # 只检测：0=有 GUI，1=没有
+```
+
+- 用 `open -g`（**-g 是关键**：不把 Chrome 切到前台，不打断用户当前操作）拉起 GUI 实例，等 LaunchServices 注册出 `Foreground` 条目（最多 15s）后才放行 headless。
+- 代价（用户 2026-10-20 已确认接受）：若用户 Chrome 本来关着，自动化会顺手把它后台启动起来。
+- **agent-browser 包装器已内置该调用**（`cleanOrphanDaemons()` 之后），走 agent-browser 的自动化无需手动加。
+- **自研脚本（直接 spawn Chrome 二进制）必须自己加**：在 `nohup "$CHROME" --headless=new ...` 之前插一行 `~/.agents/bin/chrome-guard`。
+
+**方案对比（2026-10-20 讨论定案，避免重复踩坑）**：
+
+| 方案 | Dock 冲突 | 指纹/登录 | 焦点 | 结论 |
+|---|---|---|---|---|
+| **headless + 独立 profile + chrome-guard** | 守卫解决 | 与日常 Chrome 完全一致 | 零抢占 | ✅ **现行方案** |
+| Chrome for Testing | 彻底无 | ✗ 反爬站点识别拒绝登录 | 零 | ❌ 用户明确拒绝 |
+| 复制 Chrome.app 改 bundle id + ad-hoc 重签 | 彻底无 | 一致（同二进制） | 零 | 备选；代价：Chrome 更新需重建、Keychain 弹窗、cdhash 变化使「始终允许」失效 |
+| headed + 独立 profile | 有（同 bundle） | 一致 | ✗ 启动瞬间抢焦点，移屏外/最小化都无效 | ❌ |
+| attach 日常 Chrome `--cdp 9222` | 无（不起新进程） | 用户真实登录态 | 切标签会前置窗口 | 仅用户明确要求时；会弹「请求远程控制」 |
+
+**红线段落**：
+
+1. **禁止**为了规避 Dock 冲突改用 Chrome for Testing / 其他浏览器二进制——会改变 UA 与指纹，导致用户登录态被反爬站点拒绝（用户 2026-10-20 明确要求）。
+2. **禁止**在未经 chrome-guard 检查的情况下直接用 `/Applications/Google Chrome.app` 起 headless。这是本机唯一会「让用户 Chrome 用不了」的操作。
+3. **禁止**用 headed 模式换取「看起来更真实」——一启动就抢焦点，是比 Dock 冲突更严重的打扰。
+4. 排查此类问题**不要先怀疑 agent-browser 的渲染/连接层**（`CDP response channel closed` 等是另一类问题），先跑一遍上面的 `lsappinfo` 判据。
+
+
+### 补充实测（2026-10-20 23:33，干净环境端到端验证）
+
+**关键修正：headless 实例也会被登记为 `type="Foreground"`**，不是恒定 BackgroundOnly。实测取证：
+
+```
+pid = 91046 type="Foreground" flavor=2 ...   ← headless 实例，却被登记为 Foreground
+pid = 10439 type="Foreground" flavor=3 ...   ← 守卫拉起的正常 GUI
+```
+
+判定「是不是真 GUI」要看 **`flavor=3`**（正常 app），headless 是 **`flavor=2`**。所以：
+- 光看 `type="Foreground"` 会被 headless 骗过；
+- **Dock 劫持的精确条件 = 唯一的 `com.google.Chrome` Foreground 实例是 flavor=2 的 headless**。
+
+**chrome-guard 的判定因此要收紧**：不能只认 `type="Foreground"`，必须认 `flavor=3`。当前脚本（23:11 版）只判 Foreground，存在被 headless 骗过而误判「GUI 已存在」的风险 —— 见下节修订。
+
+**端到端验证记录（PASS）**：
+
+| 阶段 | 操作 | 结果 |
+|---|---|---|
+| 0 | 杀光所有 Chrome（GUI+headless） | 主进程 0、Foreground 0、前台=DeepSeek Harness |
+| 1 | **不做任何手动 open**，只跑 `agent-browser tab` | wrapper debug 显示冷启动 owner |
+| 2 | 检查 LaunchServices | 出现 `pid 10439 type=Foreground flavor=3` = 真 GUI |
+| 3 | 检查前台 | **仍是 DeepSeek Harness —— 守卫拉起 Chrome 没有抢焦点** |
+| 4 | `open -a "Google Chrome"`（等价点 Dock） | exit=0，Foreground 数=1，正常 |
+
+**~~结论：`open -g` 确实不抢焦点~~ —— 2026-10-22 已推翻，见下节。**
+
+`open -g` 的语义是「**启动时**不把应用带到前台」（`man open`: *Do not bring the application to the foreground*）。
+但它只管**冷启动**：对**已经在运行的 app**，`open` 仍会去激活它的窗口 —— 实测在 Chrome 已运行时执行
+`open -g -a "Google Chrome"`，约 2.1s 后前台从「DeepSeek Harness」变成「Google Chrome」。上表的 PASS 记录
+只覆盖了「Chrome 原本没开、由守卫冷启动」这一条路径，**不能**推广成「open -g 永远不抢焦点」。
+
+
+## 抢焦点事故：chrome-guard 判定正则失效（2026-10-22 定位并修复）
+
+**用户报障**：用浏览器自动化时「频繁切换我的焦点，影响日常使用电脑」。
+
+**根因链（三段，全部实测复现）**：
+
+1. **判定正则永远不命中**。`chrome-guard` 的 `has_gui_instance()` 用
+   `awk '/^[0-9]+\\) "Google Chrome"/'` 匹配 LaunchServices 条目，但 `lsappinfo list` 的**行首带前导空格**
+   （实测形如 ` 9) "Google Chrome" ASN:…`）→ `^` 锚点永不成立 → `inblock` 恒 0 → `found` 恒空
+   → **永远返回「无 GUI 实例」**（`--check` 恒为 exit 1）。
+   复现命令（旧版输出 exit=1、修正后 exit=0）：
+   ```bash
+   lsappinfo list | awk '/^[0-9]+\\) "Google Chrome"/{print "命中"}'; echo "（空 = 正则从未命中）"
+   ```
+2. **于是每次自动化调用都真的执行 `open`**。wrapper 每次调用都跑 `chrome-guard`（`agent-browser` 第 148-151 行），
+   判定恒失败 → 走到「未检测到用户 Chrome GUI 实例 → 后台拉起 `open -g -a "Google Chrome"`」分支。
+   用 shim 拦截 `open` 计数验证：旧版 **1 次/调用**，修复版 **0 次**。
+3. **`open` 对已在运行的 Chrome = 激活窗口 = 抢焦点**。sample 采样实测：执行后约 **2.1s**，前台由
+   「DeepSeek Harness」变为「Google Chrome」。用户每触发一次自动化就被切一次，且每次还要多等
+   **~17–19 秒**（`sleep 2` + 30×`0.5s` 等不到注册的超时循环）。
+
+**修复（2026-10-22 已落地，旧版备份 `~/.agents/bin/chrome-guard.bak-20261022`）**：
+
+1. 判定正则允许前导空白：`/^[[:space:]]*[0-9]+\\) "Google Chrome"/`（块结束行同理）；
+2. **加安全阀**：profile 被**存活进程**持有时，即使判定不到 Foreground（注册延迟/口径差异）也**不执行 open**，直接放行。
+
+   **安全阀第一版写错过（同日发现并修正，务必按最终版实现）**：初版只判断「\`SingletonLock\` 文件是否存在」，
+   结果在 **stale lock**（Chrome 崩溃/被杀后锁残留、pid 早已不存在）时也拒绝 `open` —— 这是把
+   「频繁抢焦点」换成了「点 Dock 打不开 Chrome」，属于**更严重的回归**。正确实现必须校验锁里的 pid 是否存活：
+   ```bash
+   has_profile_lock() {
+     local lock="$PROFILE_DIR/SingletonLock" pid
+     [ -L "$lock" ] || [ -f "$lock" ] || return 1
+     pid="$(readlink "$lock" 2>/dev/null | sed 's/.*-//')"   # 锁内容形如 "hostname-<pid>"
+     case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+     kill -0 "$pid" 2>/dev/null                              # pid 存活才算「进程持有」
+   }
+   ```
+
+**修复后实测**：`--check` exit=0（`GUI 实例在运行，Dock 安全`）；热路径 **32–104ms**（原 ~18.6s）；
+`--check` **300/300 次正确**（最大 104ms，平均 40ms）；完整调用 50 连跑 `open` 调用数 **0/50**（桩正例自测 A=1 确认有效）；
+真实 `agent-browser tab list` **20 连跑前台零变化**，0 失败。
+
+**边界矩阵（隔离测试，假 `open` + 假 profile，四组合全 PASS）**：
+
+| 场景 | GUI 检测 | profile 锁 | 期望 | 实测 |
+|---|---|---|---|---|
+| 1 正常 | 成功 | — | 不 open（exit 0） | ✅ open=0 |
+| 2 注册延迟 | 失败 | 有锁 + pid 活 | 不 open（防抢焦点） | ✅ open=0 |
+| 3 Chrome 崩溃残留锁 | 失败 | 有锁 + pid 死 | **必须 open**（否则 Dock 保护失效） | ✅ open=1 |
+| 4 Chrome 真没开 | 失败 | 无锁 | **必须 open** | ✅ open=1 |
+
+**语言选型结论（2026-10-22 用户评估过 Swift / Go，最终维持 bash）**：
+
+用户问过「bash 脚本乱七八糟问题多，有没有更好的语言」。实测结论：**问题不在 bash，在「解析人类可读文本」这个做法**。
+把各语言的可行判据都实现并压测后，结论是 **维持 bash**：
+
+| 方案 | 耗时 | 判据 | 交叉编译 | cgo | 结论 |
+|---|---|---|---|---|---|
+| **bash（现行）** | 32–50ms | `lsappinfo` flavor=3 + 锁安全阀 | — | 否 | ✅ **保留** |
+| Swift + AppKit | 11ms | `activationPolicy` | ❌ minos 15.0 | 否 | ❌ 需编译/分发，收益仅 40ms |
+| Go + cgo | 17–24ms | `activationPolicy` | ❌ | **是** | ❌ 「跨平台」优势消失 |
+| Go 纯版（锁+pid） | 5–8ms | 锁+pid | ✅ | 否 | ❌ 判据退化，分不清 GUI/headless |
+| Go 纯版 + 命令行 | 5ms | sysctl 读 `--headless` | ✅ | 否 | ⚠️ 技术上可行，但本机用不到跨平台 |
+
+关键事实（都实测过，别再重复验证）：
+- `activationPolicy` 能**精确**区分 GUI(`regular`)/headless(`prohibited`)，是本需求的语义级判据；但它属于 AppKit →
+  必须 cgo → **cgo 让交叉编译失效**（报 `runtime/cgo: gcc_amd64.S unknown token`）。「跨平台」和「精确判据」在 Go 里互斥。
+- 纯 Go 的 `sysctl KERN_PROCARGS2` 可读进程命令行并检查 `--headless`，实测与 `activationPolicy` **逐实例 100% 一致**，
+  且无需 cgo、可三平台静态编译（实测 darwin/arm64、darwin/amd64、linux/amd64 全成功，minos 13.0）。
+  但这是「Chrome 行为事实」而非「API 契约」，稳定性弱于系统 API。
+- `lsappinfo -xml` 在本机**是坏的**（只输出 174 字节空行），不要指望它做结构化输出。
+- **决定性理由**：这个 guard 只跑在本机 macOS 上（`lsappinfo`/Chrome profile 路径/`open -a` 全是 macOS 专有），
+  「跨平台编译」是需求里不存在的能力；而 32–50ms 与 5–11ms 的差异用户完全无感（修复前是 18,600ms）。
+  为不存在的收益引入编译与分发成本、并把判据从「系统 API 契约」降级为「行为观察」，不划算。
+
+**安全前提（用户 2026-10-22 明确确认）**：浏览器自动化的 profile **一定不会用日常 Chrome 的 profile**。
+因此「锁判据可能分不清 GUI/headless 复用同一 profile」这一理论风险在本机不成立，bash 版的双判据足够。
+
+**验证方法（以后审计这类问题照做）**：
+
+| 手段 | 用途 |
+|---|---|
+| `lsappinfo front` + `lsappinfo info -only name <ASN>` | 前台应用**唯一可信**判据（不要用 osascript，会卡辅助功能弹窗） |
+| 给 `open` 放 `PATH` shim 并记录调用 | **证明「谁真的执行了 open」**，比看日志可靠。**两个必踩的坑（本次都踩了）**：① shim 里的日志路径若用变量（`$WS/...`）而变量未导出 → shim 静默失效、`open` 落到真实的 `/usr/bin/open`（结果「测试通过但实际动了用户 Chrome」）；② shim 内日志路径**硬编码**、外部却用另一个变量读取 → 读错文件，得到「0 次调用」的假结论。**所以每次用桩前先跑正例自测（确认该命中时确实命中，A=1），并统一日志路径** |
+| `stat -f '%Sm %z'` 看 Chrome `Default/Sessions/Session_*` | 判断是否真的新开了窗口/标签 |
+| 后台跑目标命令 + 每 0.3s 采样前台 | 能抓到 2s 级别的瞬时抢占（只看首尾会漏） |
+
+**教训（可迁移）**：
+
+- **`open -g` 只保证冷启动不进前台，不保证「不激活已运行的应用」**——对已运行的 app 调用 `open` 就是激活它。
+  任何「确保某 GUI app 在跑」的守卫逻辑，都必须先**可靠判定它是否已在运行**，否则守卫本身变成打扰源。
+- **awk 块匹配 `lsappinfo list` 必须容忍行首空白**；这类「解析别人输出」的正则失效是**静默的**（不报错、只是永远走失败分支），
+  必须用「已知有 GUI 时 `--check` 是否返回 0」这类**带正例的自测**才能发现。
+- 凡是「每次调用都跑」的守卫脚本，写完后必须验 **热路径耗时**（本次修复省掉约 18.6 秒/次）与**副作用**（open、窗口、焦点）。
+- 该 bug 自 2026-10-20 守卫上线即存在；2026-10-20 当晚那次「`open -g` 不抢焦点」的 PASS 结论**只覆盖冷启动路径**，
+  被误当成通用结论沿用 —— **结论必须写清适用前提**。
+- **修「过度打扰」类 bug 时，必须同时验证「该做的动作没被一起干掉」**。本次安全阀初版矫枉过正：
+  只加「有锁就不 open」而不校验 pid 存活，直接让 stale lock 场景下的 Dock 保护失效。
+  **正确性 = 不该动的不动 + 该动的照动**，只验前者等于没验。
+- **测试装置本身要先自测**：本次 shim 因变量未导出而静默失效，导致「open=0」的假通过。
+  凡是用 shim/桩做对照实验，先跑一次「确定该命中」的正例，确认桩真的被调用，再拿它下结论。
+- **「换语言」很少是脚本 bug 的解**：本次两个 bug —— 文本解析脆弱（正则锚点）+ 逻辑错误（安全阀没校验 pid）——
+  前者靠**换判据**（换结构化数据源）解决，后者任何语言都会犯。评估了 Swift/Go 各两种实现后结论仍是维持 bash：
+  **先问「瓶颈是语言还是判据/逻辑」**，再谈迁移。同时要算清收益量级：这里换语言的收益是 40ms，
+  而真正的修复收益是每次调用省 18.6 秒、且不再抢焦点 —— 后者才是该投入的地方。
+
+
+## 无 GUI 却未拉起 headed：PID 回绕复用与 open 缺 -n 导致 headless 独占 Dock（2026-10-24 根因修复）
+
+**用户报障**：浏览器自动化又出现了没有打开 headed 浏览器就开始使用 headless 浏览器的情况。
+
+**根因链（三处缺陷叠加，全部实测复现）**：
+
+1. **2026-10-22 的安全阀误判：PID 回绕复用使得 `has_profile_lock` 恒为真**。
+   - 2026-10-22 引入的 `has_profile_lock` 仅用 `kill -0 "$pid"` 校验锁文件中的 PID 是否存活。
+   - 但 macOS 的 PID 会回绕复用：三天前（10-21）Chrome 崩溃残留的 `SingletonLock -> yinghuoren.local-530`，其 PID 530 被 macOS 系统常驻守护进程 `suggestd` 复用。
+   - `kill -0 530` 恒返回 0（`suggestd` 存活）→ `chrome-guard` 误以为用户 Chrome 正在运行/启动中 → 触发安全阀分支：`profile 已锁定但检测不到 Foreground 条目，判定为注册延迟/口径差异；为避免抢焦点，不执行 open` 并直接 `exit 0`！
+   - 导致 `chrome-guard` 永久跳过了对真实 GUI Chrome 的拉起。
+2. **`open` 缺少 `-n`：当 headless 已经占领 bundle ID 时，普通 `open` 无法唤起新 GUI 实例**。
+   - LaunchServices 按 `com.google.Chrome` 路由 `open` 命令；若 headless 已经在跑，`open -g -a "Google Chrome"` 只是向现有的无窗口 headless 进程发送 Open 事件（该进程忽略事件），根本不会 spawn 出真正的 GUI 进程，等满 15 秒超时失败。
+   - 必须加 `-n`（`--new`）显式强制 LaunchServices 新建一个应用实例。
+3. **残留锁文件阻碍 Chrome 启动**：
+   - 若 `SingletonLock` 残留且指向存活的非 Chrome 进程，Chrome 启动时其自身 `ProcessSingleton` 连接套接字失败后可能报 `Failed to create .../SingletonLock: File exists` 中断启动。必须在启动前将陈旧的残留锁清理掉。
+
+**修复方案（`~/.agents/bin/chrome-guard` 2026-10-24 落地）**：
+1. **收紧 `has_profile_lock` 判据**：
+   - 必须同时满足：① `kill -0 "$pid"` 存活；② 检查进程名/命令行（`ps -p "$pid" -o comm=` 或 `lsof`）确实包含 `Google Chrome`；③ 对应的 `SingletonSocket` 存在且为有效 UNIX Domain Socket（`[ -S ... ]`）。
+2. **启动前清理陈旧残留锁**：
+   - 若 `SingletonLock` 存在但 `has_profile_lock` 为假（无存活 Chrome 进程持有），在 `open` 前主动清理 `$PROFILE_DIR/Singleton*`。
+3. **`open` 增加 `-n`**：
+   - `open -n -g -a "Google Chrome"`，即使 headless 已经在跑，也能强制新建 GUI Chrome 实例并注册 `flavor=3 Foreground`，恢复 Dock 正常响应。
+
+
+## wrapper exit 127 修复（2026-10-21，根因级）
+
+**症状**：`agent-browser <任意命令>` 返回 **exit 127**，stderr 只有 `env: node: No such file or directory`；
+冷启动时每条命令固定耗时 **20,000ms**（`waitForPort` 超时）后才回退。表现为"wrapper 能用但极慢"，
+实际是**完全不可用**——所有真实调用都失败，只是失败被 `Bun.spawnSync` 的 pipe 吞掉、输出重定向时看不出来。
+
+**根因**：wrapper 用 `Bun.spawnSync([REAL, ...])` 直接执行 `agent-browser.js`，而该文件 shebang 是
+`#!/usr/bin/env node` —— 即**靠 PATH 去查 node**。
+
+本机 node 由 **nvm** 管理（`~/.nvm/versions/node/vX/bin/node`），**装得好好的、用户终端里也正常可用**（zsh 加载
+`.zprofile`/`.zshrc` 后 PATH 含该目录）。真正的坑是：**DSH 会话 spawn 的子进程 PATH 不一定包含 nvm 目录**
+（取决于会话/沙盒/启动方式）。同一台机器实测对照：
+
+| 执行环境 | `command -v node` | 直接执行 `agent-browser.js --version` |
+|---|---|---|
+| PATH 含 `/Users/liyou/.nvm/versions/node/vX/bin` | 找到 | `agent-browser 0.38.2` ✅ |
+| PATH 不含 nvm（如手写的 `/Users/liyou/.bun/bin:/opt/homebrew/bin:/usr/local/bin:...`） | 找不到 | `env: node: No such file or directory` ❌ |
+
+失败连锁：所有 `[REAL, ...]` 调用 exit 127 → `bootstrapOwner()` 静默失败 → owner 永远起不来 →
+`waitForPort()` 每条命令等满 20 秒。
+
+**排查口径**：不要在用户终端里验证（那里当然有 node），要在**实际跑 wrapper 的那个子进程环境**里验证：
+`env -i PATH="<该环境的 PATH>" /path/to/agent-browser.js --version`。
+
+**修复**（`~/.agents/bin/agent-browser` 第 63 行 + 5 处调用点）：
+```ts
+const JS_RUNNER = process.execPath;   // 本文件由 bun 执行 → 即 bun 绝对路径
+// 所有 [REAL, ...] → [JS_RUNNER, REAL, ...]
+```
+
+**修复后实测**：冷启动 **1,855ms**（原 20,300ms，快 11 倍）；热路径 231–304ms；
+`open` / `get title` / `eval` / `screenshot` 全部 exit=0（截图 71KB 真实生成）；用户 Chrome 未受影响。
+
+**排查提示**：以后看到 wrapper "慢"或"没反应"，**第一步先看 exit code**（`agent-browser get title; echo $?`）。
+exit 127 = 解释器问题；exit 0 但无输出 = 另一回事。不要只看耗时。
+
+**教训**：`Bun.spawnSync` / `execFile` 直接执行带 `#!/usr/bin/env node` shebang 的脚本时，
+必须确认 `node` 在**子进程 PATH** 里；本机 node 在 nvm 下，任何不经过交互式 shell 的 spawn 都拿不到它。
+稳妥做法是显式用 `process.execPath`（或 `bun`/`node` 绝对路径）作为 runner。
+
+## 用完必清：会话与标签回收纪律（2026-10-27 用户明确要求）
+
+**用户原话（2026-10-27）**：「你打开了太多的 chrome 标签，不用的一定要记得清理掉，这个要沉淀到 skill 中」。
+
+**当日实测泄漏**：一轮 a11y 矩阵审计跑批（多个 worker × 多次重跑）结束后，`agent-browser session list` 残留 **8 个 `<项目前缀>-audit-*` 会话**，`ps aux | grep 'Chrome for Testing'` 达 **81 个进程**，且每个会话各带多个标签。清理后进程归零。
+
+**硬规则**：
+
+1. **每个任务/脚本结束时必须回收自己的会话**：房客直接 `agent-browser close`；独立实例（`AGENT_BROWSER_GLOBAL_SESSION=<名>` / `--session <名>`）用 `agent-browser --session <名> close`。
+2. **跑批脚本必须在 trap EXIT 中关闭自身 session**（某项目 的 `scripts/browser-a11y.sh` / `browser-touch.sh` 已实现；新脚本照此模式），否则一次矩阵 6 组合 × 多次重跑会累积成几十个 Chrome。
+3. **人工任务收尾三连检查**（写进每轮工作流程）：
+   ```bash
+   agent-browser session list                  # 只应剩当前任务会话
+   ps aux | grep -c 'Chrome for Testing'       # 期望 0（无任务）或仅活跃任务数
+   agent-browser tab list                       # 当前会话只留 1 个标签
+   ```
+4. **禁止 `close --all`**（wrapper 硬拦）；也**不得关别人的会话**，先确认该会话无 active socket/无任务（`lsof ~/.agent-browser/<名>.sock`）。
+5. **同一会话顺序复用单个 tab**：`open` 的语义就是导航当前 tab；不要用 `tab new` 累积标签，除非明确需要多标签对照。
+
+**2026-10-27 实际清理命令（可直接复用）**：
+
+```bash
+for s in $(agent-browser session list | grep -o '<项目前缀>-audit-[A-Za-z0-9-]*'); do
+  agent-browser --session "$s" close
+done
+agent-browser session list                      # 确认只剩当前 dsh-* 房客
+ps aux | grep -c 'Chrome for Testing'            # 0
+```
+
+**归属判断口径**：`dsh-*` / `shared` 是 wrapper 管辖的房客与 owner，不要动；`<项目前缀>-audit-*`、`lead-*`、`manual-*` 这类临时会话按任务归属自行清理。
+
+## 孤儿 daemon+Chrome 收割器——公共层兜底（2026-10-27 落地，端到端实测）
+
+**为什么需要**：显式 `--session` 独立实例（自带 headless Chrome + 临时 profile）的宿主脚本被 SIGINT/SIGTERM/SIGKILL 打断、或 `close` 失败被 `|| true` 吞掉时，daemon 与它拉起的 Chrome 都不会自退（attach 型 daemon 豁免空闲回收）。实测一夜累积多组孤儿（峰值 8 组 ≈112% CPU + 5.2GB 内存，整机 load >15）。wrapper 的 `purgeDeadSessionState` 只清「进程已死」的残留状态文件，管不到「进程活着但宿主已消失」的实例——`~/.agents/bin/ab-reap-orphans.mjs` 补这一层，wrapper 每次调用自动节流派发（1h 至多一次，stamp `~/.agent-browser/.last-orphan-reap`）。
+
+**判据与保障（全部实测）**：
+- **永不触碰**：`shared`（owner）、`dsh-*` / `manual-*`（房客，attach 模式不自带 Chrome）、`AB_REAP_PROTECT_SESSIONS` 额外名单（wrapper 注入调用方当前会话）、以及任何持 `profiles/main` Chrome 的会话。
+- **候选**：sock 存在 + daemon 存活（pid 需核「进程命令行含 agent-browser + 是本会话 sock 持有者」双重身份，防 pid 回绕复用误杀）+ 其 Chrome 子进程用临时 profile（`agent-browser-chrome-*`）。
+- **两段式**：首次发现写标记 `~/.agent-browser/.orphan-mark/<会话>`；标记满最小龄（默认 600s，`--min-age` 可覆盖）且 sock 仍无 daemon 之外的客户端才收割——活任务两次采样之间必有命令连接，不会误杀；宿主无论怎么死（含 SIGKILL）都能兜住。
+- **动作顺序**：先记 Chrome 子进程 pid + user-data-dir（daemon 死后子进程过继 launchd，`pgrep -P` 将失效）→ TERM→2s→KILL daemon → Chrome 按「pid + user-data-dir 双重核对」TERM→KILL → 删状态文件与临时 profile 目录。
+
+**手动命令**：
+
+```bash
+node ~/.agents/bin/ab-reap-orphans.mjs --dry-run    # 只评估不动手
+node ~/.agents/bin/ab-reap-orphans.mjs --min-age 0  # 立即收割当前确认孤儿（先核实无活任务再用）
+```
+
+**端到端验证（2026-10-27 20:56）**：dry-run 正确列出 7 个孤儿（4 组带 chrome + 3 组 chrome-less 残留 daemon），保护名单零误报；`--min-age 0` 实跑全部收割，Chrome 主进程 5→1（仅剩 owner），4 个临时 profile 目录删除，shared / dsh-* / manual-* 全部完好；wrapper 冒烟（tab list）exit=0 且派发 stamp 正常刷新。
+
+**可迁移教训**：
+- 脚本侧 `trap '... close ... || true' EXIT` 是单点：close 失败静默、SIGKILL 时 trap 不执行。生命周期清理必须有公共层兜底，不能依赖每个调用方都写对。
+- 判活不能只看 `kill -0`：pid 会回绕复用（chrome-guard 2026-10-24 同类教训），必须核对进程命令行 + 会话 sock 持有者。
+- 「daemon 存活」≠「宿主还在」：daemon daemonize 后父进程是 launchd，无法从进程树推断归属，只能靠 sock 客户端活跃度 + 时间窗近似。
+
+## 清理义务——不用的及时清理（2026-10-27 定案，红线级）
+
+**公共层兜底（reaper）不是豁免理由**，每个调用方仍负有清理义务：
+
+1. **独立实例用完即关**：`agent-browser --session <名> close`（只关自己的；`close --all` 仍是红线）。
+   宿主被 SIGKILL 时 trap 不会执行——那由 reaper 兜底，但正常路径必须自己 close。
+2. **任务收尾复查两件事**：`agent-browser session list`（有没有不该存在的会话）、
+   `ps aux | grep -c 'remote-debugging-port=0'`（headless Chrome 主进程数是否超出预期）。
+   发现异常残留：先核实无活任务，再 `node ~/.agents/bin/ab-reap-orphans.mjs --min-age 0` 立即收割。
+3. **产物不落公共目录**：截图/HAR/下载等属项目中间产物，落项目 `.workwork/`；
+   确因工具默认路径落到 `~/.agent-browser/tmp/` 的，reaper 按 7 天 TTL（`AB_TMP_TTL_DAYS`）自动清理，
+   需要保留的当场挪走——`--dry-run` 可预览将清理的文件数。
+4. **持久 profile 不用了要删**：`~/.agent-browser/profiles/<用途>/` 与项目自建 profile。
+   项目废弃或改方案时连同状态文件一并清；删前 tar 备份到 `~/.dsh/backups/`（2026-10-27 已按此处置一个 16MB 零引用遗留 profile）。
+5. **会话命名按任务独立**（`--session <名>-$$` 或项目固定名），禁止复用他人/他项目的名字；
+   跨项目固定名冲突会让两个任务共用同一浏览器实例（标签互抢）。
+
+**收益基线（2026-10-27 实测）**：一夜累积 8 组孤儿 ≈112% CPU + 5.2GB 内存；清理后整机 load 15.8→2.4，
+内存空闲 31%→68%。泄漏不值得，清理不麻烦。
+
+补充（2026-10-27 同日）：reaper 只扫描 `~/.agent-browser/` 下的会话；显式设置 `AGENT_BROWSER_SOCKET_DIR` 把 socket 重定向到别处（如仓库/worktree 内）的会话**不在收割范围**，且该重定向机制本身已废弃（现行路径：目录写权限走 sandbox-extra-roots 放行 + 默认 socket 目录）。发现仍用旧重定向的脚本时按废弃处理。

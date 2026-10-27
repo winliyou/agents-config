@@ -1,0 +1,157 @@
+#!/bin/bash
+# chrome-guard —— 保证 headless 自动化不抢占用户日常 Chrome 的 Dock 身份（2026-10-20/24）
+#
+# 背景：agent-browser 与自研脚本默认用 /Applications/Google Chrome.app 的真实二进制启动
+# headless 实例（刻意如此：UA/指纹/登录态与日常 Chrome 完全一致，反爬站点不会拒绝）。
+# 但 macOS LaunchServices 按 CFBundleIdentifier 判定"某 app 是否在运行"，**与 profile /
+# user-data-dir 无关**——任何用同一 Chrome.app 起的 headless 实例，都会被登记成
+# com.google.Chrome 的一个实例。
+#
+# 故障现象（2026-10-20 实测复现）：当用户没有 GUI 实例、只有 headless 占着 bundle id 时，
+# 点 Dock 图标 / 右键"新建窗口" / open -a "Google Chrome" 全部去"激活"那个无窗口的
+# BackgroundOnly 实例 → 什么都不发生，用户无法使用 Chrome。
+#
+# 修法：启动 headless 之前先跑本脚本。它保证"始终有一个 Foreground 的 GUI 实例"存在，
+# 于是 Dock 点击永远能被正常响应；headless 只是多出来的 BackgroundOnly 条目，无害。
+#
+# 用法：
+#   chrome-guard            # 幂等；退出码 0 = 现在可以安全启动 headless
+#   chrome-guard --check    # 只检查不拉起（0=有 GUI 实例，1=没有）
+#   chrome-guard --quiet    # 静默
+#
+# 实测：GUI 实例存在时 headless 并存，open -a 返回 0；
+#       lsappinfo 中 GUI=Foreground / headless=BackgroundOnly，Dock 正常。
+
+set -u
+
+CHROME_APP="/Applications/Google Chrome.app"
+PROFILE_DIR="$HOME/Library/Application Support/Google/Chrome"
+MODE="ensure"
+QUIET=0
+
+for a in "$@"; do
+  case "$a" in
+    --check) MODE="check" ;;
+    --quiet) QUIET=1 ;;
+    --help|-h) sed -n '2,28p' "$0"; exit 0 ;;
+  esac
+done
+
+log() { [ "$QUIET" = "1" ] || echo "[chrome-guard] $*" >&2; }
+
+# 判定是否存在真实 GUI 实例：LaunchServices 里 com.google.Chrome 有 type="Foreground" 且 flavor=3。
+# 注意：headless 实例也可能被登记为 type="Foreground"（实测 pid 91046 flavor=2），
+# 只判 type 会被骗过 —— 必须同时要求 flavor=3（正常 app；headless 是 flavor=2）。
+# 用 lsappinfo 而非 ps —— 沙盒会话常禁 ps（/bin/ps: Operation not permitted）。
+has_gui_instance() {
+  # 2026-10-22 修复(抢焦点根因①): lsappinfo list 的行首带前导空格（实测形如 ' 9) "Google Chrome"'），
+  # 原正则 /^[0-9]+\) .../ 要求序号紧贴行首 → 永远不命中 → inblock 恒为 0 → found 恒为空
+  # → 恒判「无 GUI 实例」→ 每次调用都对已在运行的 Chrome 执行 open → 激活窗口、抢走焦点。
+  # 必须允许前导空白。
+  lsappinfo list 2>/dev/null | awk '
+    /^[[:space:]]*[0-9]+\) "Google Chrome"/ { inblock=1; next }
+    inblock && /^[[:space:]]*[0-9]+\) / { inblock=0 }
+    inblock && /type="Foreground"/ && /flavor=3/ { found=1 }
+    END { exit(found?0:1) }
+  '
+}
+
+# 辅助函数：校验指定 pid 是否真的是 Google Chrome 进程
+is_chrome_proc() {
+  local p="$1"
+  [ -n "$p" ] || return 1
+  kill -0 "$p" 2>/dev/null || return 1
+  local comm
+  comm="$(ps -p "$p" -o comm= 2>/dev/null)"
+  case "$comm" in
+    *Google\ Chrome*) return 0 ;;
+  esac
+  # 兜底用 lsof 检查（某些沙盒下 ps 被禁时）
+  if lsof -p "$p" 2>/dev/null | grep -q "Google Chrome"; then
+    return 0
+  fi
+  return 1
+}
+
+# 兜底判据：profile 被**存活的 Google Chrome 进程**持有。
+# 2026-10-24 修正(关键):
+# 仅 kill -0 $pid 会误判！macOS PID 会回绕复用（如 PID 530 被系统服务 suggestd 复用）。
+# 必须同时校验：
+# 1. pid 是有效数字且进程存活
+# 2. 该进程必须是 Google Chrome（防止系统服务复用 PID 导致误判）
+# 3. 必须有对应的 SingletonSocket 活套接字（若套接字不存在，属于 Chrome 崩溃后的残留锁）
+has_profile_lock() {
+  local lock="$PROFILE_DIR/SingletonLock" pid
+  [ -L "$lock" ] || [ -f "$lock" ] || return 1
+  # 解析 "<host>-<pid>" 的 pid 部分
+  pid="$(readlink "$lock" 2>/dev/null | sed 's/.*-//')"
+  case "$pid" in
+    ''|*[!0-9]*) return 1 ;;   # 解析不出数字 = 不可信，按"无进程持有"处理
+  esac
+  is_chrome_proc "$pid" || return 1
+  [ -S "$PROFILE_DIR/SingletonSocket" ] || return 1
+  return 0
+}
+
+# 清理陈旧残留锁（若锁存在但无活的 Chrome 进程持有）
+clean_stale_profile_lock() {
+  local lock="$PROFILE_DIR/SingletonLock"
+  if [ -L "$lock" ] || [ -f "$lock" ]; then
+    if ! has_profile_lock; then
+      log "检测到陈旧的 SingletonLock（无存活 Chrome 进程持有），正在清理残留…"
+      rm -f "$PROFILE_DIR/SingletonLock" "$PROFILE_DIR/SingletonCookie" "$PROFILE_DIR/SingletonSocket" 2>/dev/null
+    fi
+  fi
+}
+
+if has_gui_instance; then
+  log "GUI 实例在运行，Dock 安全"
+  exit 0
+fi
+
+if [ "$MODE" = "check" ]; then
+  log "无 GUI 实例（headless 会独占 Dock 身份）"
+  has_profile_lock && log "但 profile 已被锁定，可能正在启动"
+  exit 1
+fi
+
+# 可能刚启动还没注册完，给 2 秒
+if has_profile_lock; then
+  log "profile 已锁定但暂无 Foreground 条目，等待注册…"
+  sleep 2
+  if has_gui_instance; then
+    log "GUI 实例已就绪"
+    exit 0
+  fi
+  # 2026-10-22 修复(抢焦点根因② 安全阀): profile 被 SingletonLock 锁定 = 用户 GUI Chrome 正在运行
+  # （Chrome 退出时无论正常与否都会清掉该锁）。此时检测不到 Foreground 只可能是注册延迟或口径
+  # 不一致，**不能**再对已运行的 Chrome 执行 open —— open 会激活它的窗口、把用户从前台应用切走。
+  log "profile 已锁定但检测不到 Foreground 条目，判定为注册延迟/口径差异；为避免抢焦点，不执行 open"
+  exit 0
+fi
+
+# 到这里说明没有活的 Chrome GUI 进程持有 profile。先清理残留锁，防止阻碍 Chrome 启动
+clean_stale_profile_lock
+
+log "未检测到用户 Chrome GUI 实例 → 后台拉起（-n 强制新建实例，-g 不抢焦点）"
+# -n 是关键：若 headless 已经占着 bundle ID，必须加 -n 才能强制拉起新的 GUI 实例（否则 open 会把事件发给无窗口的 headless 进程导致静默无反应）
+# -g 是关键：尽量不把应用带到前台
+if ! open -n -g -a "Google Chrome" 2>/dev/null; then
+  log "open -n -g -a 失败，改用 app 路径"
+  open -n -g "$CHROME_APP" 2>/dev/null || log "警告：Chrome 启动失败"
+fi
+
+# 等 LaunchServices 注册出 Foreground 实例（最多 15 秒）
+i=0
+while [ "$i" -lt 30 ]; do
+  if has_gui_instance; then
+    log "GUI 实例已就绪（$((i*500))ms）"
+    exit 0
+  fi
+  sleep 0.5
+  i=$((i+1))
+done
+
+# 超时不阻塞自动化：报告但放行（调用方自行决定）
+log "警告：等待 GUI 实例超时；继续执行，但 Dock 可能短暂受影响"
+exit 0

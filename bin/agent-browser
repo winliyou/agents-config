@@ -40,7 +40,10 @@
 //      并用官方 AGENT_BROWSER_USER_AGENT 覆盖为正常 Chrome UA(消 HeadlessChrome 指纹);
 //      注:ARGS 经 agent-browser 按逗号硬拆,含逗号的值(如 --window-position=x,y)不可经此传递,
 //      残尾数字会被 Chrome 当整数 IP URL(http://0.0.3.32/ = 800,2026-10-15 实测);
-//   4) 空闲回收:仅非房客禁用(IDLE_TIMEOUT_MS=0);房客 daemon 1h 自退,下次按 targetId 重挂;
+//   4) 空闲回收:仅非房客禁用(IDLE_TIMEOUT_MS=0)。房客走 --cdp attach,属上游"user-attached
+//      browsers",豁免空闲回收——实测永不自退(2026-10-16:manual-* daemon 存活 3h+ 仍健在)。
+//      因此房客标签只能靠显式 close(先摘标签)或下方孤儿 tab 兜底清理回收,
+//      绝不能指望 daemon 自退;本注释 2026-10-16 修正,旧文"房客 daemon 1h 自退"与实现不符;
 //   5) owner 状态异常(sock 在但端口不可发现/端口死)→ 自愈:清 stale 状态、结束孤儿 Chrome
 //      (严格按 user-data-dir 匹配)、重置 exit_type 防崩溃恢复、清失效房客,再重新拉起 owner。
 // 排障:AGENT_BROWSER_WRAPPER_DEBUG=1 打印决策。
@@ -52,6 +55,12 @@ import { createHash } from "node:crypto";
 const sockExists = (p: string) => { try { return statSync(p).isSocket(); } catch { return false; } };
 const HOME = process.env.HOME ?? "";
 const REAL = HOME + "/.bun/install/global/node_modules/agent-browser/bin/agent-browser.js";
+// 2026-10-21 修复(根因): REAL 的 shebang 是 #!/usr/bin/env node,而本机 node 由 nvm 管理
+// (/Users/liyou/.nvm/versions/node/vX/bin/node),不在默认 PATH。直接 exec REAL 会报
+// env: node: No such file or directory (exit 127) -> wrapper 全部命令失效,且冷启动时
+// bootstrapOwner 静默失败后每条命令空等 waitForPort 的 20 秒超时。
+// 修法:用当前解释器(本文件由 bun 执行,process.execPath 即 bun 绝对路径)显式执行 REAL。
+const JS_RUNNER = process.execPath;
 const AB_HOME = process.env.AGENT_BROWSER_HOME ?? HOME + "/.agent-browser";
 const OWNER_PROFILE = AB_HOME + "/profiles/main";
 const argv = process.argv.slice(2);
@@ -128,6 +137,19 @@ const killAllDaemons = () => {
 
 await cleanOrphanDaemons();
 
+// ---------- Chrome Dock 守卫(2026-10-20) ----------
+// 背景:agent-browser 用 /Applications/Google Chrome.app 的真实二进制起 headless(刻意如此:
+// UA/指纹/登录态与日常 Chrome 一致,反爬站点不拒绝)。但 macOS LaunchServices 按
+// CFBundleIdentifier 判定「该 app 是否在运行」,与 profile 无关 —— 若用户没有 GUI 实例,
+// 点 Dock 图标 / 右键新建窗口 会去激活那个无窗口的 headless 实例,表现为「点了没反应」。
+// 修法:启动任何浏览器实例前,先确保用户 GUI Chrome 在跑(headless 只是多一个无害的后台条目)。
+// 守卫幂等:GUI 已存在时 <50ms 返回,不重复拉起;失败也不阻塞自动化。
+// 详见 ~/.agents/skills/browser-automation-safety/SKILL.md
+const guardScript = HOME + "/.agents/bin/chrome-guard";
+try {
+  if (require("node:fs").existsSync(guardScript)) run([guardScript, "--quiet"]);
+} catch {}
+
 // 兜底清理:清掉"已死房客"留下的状态文件。
 // 2026-10-15 实测发现:房客 daemon 自行退出(空闲 1h 回收/kill)时不会带走 .target/.config,
 // 且部分关闭路径早于本轮修复 → 实测累积了 28 组孤儿文件(有 .target 无 .sock)。
@@ -135,22 +157,92 @@ await cleanOrphanDaemons();
 const purgeDeadSessionState = () => {
   try {
     const fs = require("node:fs");
+    const path0 = require("node:path");
     const names = new Set<string>();
     for (const f of fs.readdirSync(AB_HOME)) {
-      const m = /^((?:dsh|manual)-[^.]+)\.(?:target|config)$/.exec(f);
+      // 2026-10-16 修正:不再限定 dsh-/manual- 前缀 —— 实测 explicit session(如 hotspot-qa/ui-dark)
+      // 残留的 26 组状态文件因前缀不匹配而永不清理。凡"会话名.状态扩展名"都纳入。
+      const m = /^([^.]+)\.(?:target|config)$/.exec(f);
       if (m) names.add(m[1]);
     }
     for (const n of names) {
-      if (sockExists(AB_HOME + "/" + n + ".sock")) continue;
+      if (n === "shared") continue; // owner 的状态由 owner 自愈逻辑管理,不在这里动
       let pid = "";
       try { pid = fs.readFileSync(AB_HOME + "/" + n + ".pid", "utf8").trim(); } catch {}
       if (pid && run(["kill", "-0", pid]).exitCode === 0) continue; // 进程还活着,别动
-      for (const ext of ["target", "config", "pid", "stream", "version"]) rmFile(AB_HOME + "/" + n + "." + ext);
-      debug("清理已死会话的残留状态:" + n);
+      // 2026-10-16 修正:死 daemon 会留下陈旧 .sock —— 旧逻辑"sockExists 即跳过"会被
+      // 这具陈旧 sock 永久短路(26 组死会话残留的真因)。判活以 .pid 为准:
+      //   .pid 存在且进程死  → sock 一定是陈旧的,连同状态文件一起删;
+      //   .pid 缺失(无法判死) → 保守起见维持旧行为,只删非 sock 状态文件。
+      const sockStale = Boolean(pid);
+      if (sockStale) rmFile(AB_HOME + "/" + n + ".sock");
+      if (!sockExists(AB_HOME + "/" + n + ".sock")) {
+        for (const ext of ["target", "config", "pid", "stream", "version", "engine"]) rmFile(AB_HOME + "/" + n + "." + ext);
+        debug("清理已死会话的残留状态:" + n + (sockStale ? "(含陈旧 sock)" : ""));
+      }
     }
   } catch {}
 };
+// 2026-10-16 修复:集成孤儿 tab 清理时误删了本调用行,导致 purge 长期未执行(26 组死会话残留)。
 purgeDeadSessionState();
+
+// ---------- 孤儿 daemon+Chrome 收割(2026-10-27) ----------
+// 背景:显式 --session 独立实例(自带 headless Chrome + 临时 profile)的宿主脚本被
+// SIGINT/SIGTERM/SIGKILL 打断、或 close 失败被 "|| true" 吞掉时,daemon 与 Chrome 都不会
+// 自退(attach 型 daemon 豁免空闲回收),实测一夜累积 8 组孤儿 ≈112% CPU + 5.2GB 内存。
+// purgeDeadSessionState 只清「进程已死」的残留,本收割器补「进程活着但宿主已消失」这层:
+// 两段式(首次发现写标记,默认 ≥10min 后 sock 仍无客户端才动手;活任务两次采样之间必有
+// 命令连接,不会误杀)。shared/dsh-*/manual-* 与调用方当前会话(effSession 经
+// AB_REAP_PROTECT_SESSIONS)永不触碰;持 profiles/main Chrome 的会话一律跳过。
+// 脚本与判据细节:同目录 ab-reap-orphans.mjs(支持 --dry-run / --min-age 手动执行)。
+const reapOrphanDaemons = () => {
+  try {
+    const fs0 = require("node:fs");
+    const path0 = require("node:path");
+    const stamp = AB_HOME + "/.last-orphan-reap";
+    let last = 0;
+    try { last = Number((fs0.readFileSync(stamp, "utf8") || "").trim() || 0); } catch {}
+    if (Date.now() - last < 3600_000) return; // 节流:1h 至多一次
+    fs0.writeFileSync(stamp, String(Date.now()));
+    const script = path0.join(path0.dirname(fs0.realpathSync(process.argv[1])), "ab-reap-orphans.mjs");
+    const prot = [effSession].filter(Boolean).join(",");
+    const child = Bun.spawn([process.execPath, script], {
+      stdin: "ignore", stdout: "ignore", stderr: "ignore",
+      env: { ...process.env, AB_REAP_PROTECT_SESSIONS: prot },
+    });
+    child.unref?.();
+    debug("已派发孤儿 daemon 收割(节流 1h):" + script + " 保护会话=" + prot);
+  } catch {}
+};
+reapOrphanDaemons();
+
+// ---------- 孤儿 tab 兜底清理(2026-10-16) ----------
+// 房客 daemon 走 --cdp attach 豁免空闲回收(见功能清单 4,实测永不自退),标签只能靠显式 close
+// 回收;而会话结束无人 close → 标签只增不减(2026-10-16 实测一夜 37 个,16 个 about:blank;
+// 根因还包括 manual-<ppid> 兜底让"无 DSH_SESSION_ID 的调用"每次都是新会话)。
+// 这里每至多 1h 派发一次独立清理进程(分离、不阻塞、失败静默):只关 about:blank 与
+// 无对话内容的 gemini 新对话页 —— 此类标签即使属于活会话,关掉也无损失(下次调用按
+// tab_gone 自动重绑,见 runWithTabGoneHeal);有内容的对话页绝不碰。
+// 清理脚本: 同目录 ab-reap-tabs.mjs;调用者的会话名经 AB_REAP_PROTECT_SESSIONS 传给它做保护。
+const reapOrphanTabs = (protectSessions: string[]) => {
+  try {
+    const fs0 = require("node:fs");
+    const stamp = AB_HOME + "/.last-tab-reap";
+    let last = 0;
+    try { last = Number((fs0.readFileSync(stamp, "utf8") || "").trim() || 0); } catch {} // 首次运行无 stamp,ENOENT 是正常路径
+    if (Date.now() - last < 3600_000) return; // 节流:1h 至多一次
+    fs0.writeFileSync(stamp, String(Date.now()));
+    const path0 = require("node:path");
+    const script = path0.join(path0.dirname(fs0.realpathSync(process.argv[1])), "ab-reap-tabs.mjs");
+    const prot = protectSessions.filter(Boolean).join(",");
+    const child = Bun.spawn([process.execPath, script], {
+      stdin: "ignore", stdout: "ignore", stderr: "ignore",
+      env: { ...process.env, AB_REAP_PROTECT_SESSIONS: prot },
+    });
+    child.unref?.();
+    debug("已派发孤儿 tab 兜底清理(节流 1h):" + script + " 保护会话=" + prot);
+  } catch {}
+};
 
 // ---------- 静默运行:不抢焦点(先算好:owner 冷启动与正式执行共用) ----------
 // 2026-10-15 实测结论(独立实例受控对照,前台应用用 lsappinfo front 判定):
@@ -267,7 +359,7 @@ const bootstrapOwner = () => {
   const bootEnv = childEnv();
   if (!bootEnv.AGENT_BROWSER_IDLE_TIMEOUT_MS) bootEnv.AGENT_BROWSER_IDLE_TIMEOUT_MS = "0";
   return Bun.spawnSync(
-    [REAL, "--session", "shared", "--profile", OWNER_PROFILE, "--pin-tab", "open", "about:blank"],
+    [JS_RUNNER, REAL, "--session", "shared", "--profile", OWNER_PROFILE, "--pin-tab", "open", "about:blank"],
     { env: bootEnv, stdout: "pipe", stderr: "pipe" },
   );
 };
@@ -288,9 +380,16 @@ if (explicit) {
     // 实测教训:末 8 字符会碰撞(如 postheal-...aaaa 与 soakaaaa-...aaaa 都得到 dsh-0000aaaa),
     // 两个不同会话共用一个 session → 绑定互相覆盖并报 tab_gone。哈希取 8 位六十四进制,冲突概率可忽略。
     const dsh = process.env.DSH_SESSION_ID ?? "";
+    // 2026-10-16 修正:无 DSH_SESSION_ID 的兜底名,旧版用 manual-<ppid%1e6> —— 而 agent 环境里
+    // 每条命令的父进程都不同,等于"每次调用一个新会话":实测 fft_cover 一处自动化半天累积
+    // 55 个会话(55 个 daemon + 55 个标签,几乎全是 about:blank)。daemon 又豁免空闲回收永不
+    // 自退,只能靠 reaper 兜底。现改为对【调用方工作目录】取哈希:同一项目目录复用同一房客,
+    // 天然满足"一个会话一个标签";不同项目目录之间依旧隔离。
+    // 代价:同目录下并发跑两个自动化会共用同一个标签(与上游 default 单例等价,且严格更优);
+    // 需要并发的场景请显式传 --session(该路径优先级最高,不受此兜底影响)。
     guestName = dsh
       ? "dsh-" + createHash("sha256").update(dsh).digest("hex").slice(0, 8)
-      : "manual-" + String((process.ppid ?? 0) % 1_000_000).padStart(6, "0");
+      : "manual-" + createHash("sha256").update("cwd:" + process.cwd()).digest("hex").slice(0, 8);
     guestPort = port;
     injectEnv.AGENT_BROWSER_SESSION = guestName;
     // --cdp 不是 sticky:漏传一次该 session 就掉回 owner 并顶掉别人页面,故每次调用都重复注入;
@@ -360,7 +459,7 @@ if (closeSessionName) {
   if (cport && isGuestDaemon(closeSessionName, cport)) {
     const t = await sessionTarget(closeSessionName);
     if (t.targetId) {
-      run([REAL, "--session", closeSessionName, "--cdp", cport, "--pin-tab", "tab", "close", t.targetId]);
+      run([JS_RUNNER, REAL, "--session", closeSessionName, "--cdp", cport, "--pin-tab", "tab", "close", t.targetId]);
       debug("关闭 " + closeSessionName + ":已摘掉其 pinned tab " + t.targetId);
     }
   }
@@ -410,7 +509,7 @@ debug("最终执行:session=" + finalSession + " guest=" + guest + " args=" + JS
 // stdout 一律 inherit:直接把子进程输出交给原终端,不做缓冲/转发 ——
 // 避免改变上游对 TTY 的判断(格式化输出如 open/snapshot 会因管道而变化)。
 // 只把 stderr 收进管道,用于识别 tab_gone(该错误只写 stderr,stdout 为空,已实测)。
-const spawnChild = () => Bun.spawnSync([REAL, ...inject, ...argv], {
+const spawnChild = () => Bun.spawnSync([JS_RUNNER, REAL, ...inject, ...argv], {
   env: childEnv(),
   stdio: ["inherit", "inherit", "pipe"],
 });
@@ -428,7 +527,7 @@ const runWithTabGoneHeal = () => {
     // lastUrl 可能是 data:/blob: 等不可再访问的 URL,只有 http(s) 才值得恢复
     const safe = /^https?:\/\//.test(lastUrl) ? lastUrl : "about:blank";
     debug("检测到 tab_gone,用 lastUrl 重绑后重试:" + safe);
-    run([REAL, "--session", guestName, "--cdp", guestPort, "--pin-tab", "tab", "new", safe]);
+    run([JS_RUNNER, REAL, "--session", guestName, "--cdp", guestPort, "--pin-tab", "tab", "new", safe]);
     process.stderr.write("[wrapper] 绑定的 tab 已被关闭,已自动重绑到 " + safe + "(取自 lastUrl)。\n");
     const retry = spawnChild();
     // 重试若仍失败,报它自己的错误(而不是上面那条已被自愈处理的 tab_gone)
@@ -439,6 +538,7 @@ const runWithTabGoneHeal = () => {
   return first;
 };
 
+if (guest) reapOrphanTabs([guestName, effSession]); // 派发须在会话路由后:保护名单要用最终 guestName
 const proc = runWithTabGoneHeal();
 if (closeSessionName && (proc.exitCode ?? 0) === 0) purgeSessionFiles(closeSessionName);
 process.exit(proc.exitCode ?? 0);
