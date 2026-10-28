@@ -5,7 +5,7 @@ description: 跨设备实时音频流（采集→传输→播放）的正确架�
 
 # 跨设备实时音频流：采集 → 传输 → 播放
 
-实测架构（某项目 项目，Windows 游戏音频 → Mac 播放，2026-10-18 用户确认声音正常）：
+实测架构（桌面端串流：Windows 游戏音频 → macOS 播放，2026-10-18 用户确认声音正常）：
 
 ## Windows 系统声捕获（WASAPI Loopback / miniaudio）
 
@@ -47,9 +47,9 @@ description: 跨设备实时音频流（采集→传输→播放）的正确架�
 - node 的 WebSocket 二进制帧默认是 Blob，必须显式 `ws.binaryType = 'arraybuffer'`（否则统计恒 0）。
 - 音频特征判断：真实音频为多频成分连续波形；恒定幅度周期信号或大量 DC 分量 = 非音频内容。
 
-## 播放端解码能力差异（WebCodecs 并非全平台，2026-10-21 实测）
+## 播放端解码能力差异（WebCodecs 并非全平台）
 
-- **Chrome/Edge/WebView2 有 `AudioDecoder`；Safari 与 WKWebView 没有**：实测 macOS 15.8 的
+- **Chrome/Edge/WebView2 有 `AudioDecoder`；Safari 与 WKWebView 没有**：2026-10-21 实测 macOS 15.8 的
   WKWebView 里 `typeof AudioDecoder === 'undefined'`（`VideoDecoder` 存在）。Safari 浏览器同理。
 - 危险的自检陷阱：这类 WebView 里 `isSecureContext === true`、AudioWorklet 可用，于是
   "Web Audio 能跑"会被误判成"Opus 能解码"；表现为**WS 有音频字节流入（码率正常）但完全无声**。

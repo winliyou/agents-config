@@ -53,7 +53,7 @@ DSH 沙盒问题第一入口。**本机唯一首选解法：凡是「某个 home
 
 ## 四、降低子进程沙盒的判定规则（本机已获用户授权，仅限 agent-browser/Chrome）
 
-`--no-sandbox` 会降低子进程隔离等级。本机用户已对 **agent-browser / Chrome** 明确授权（原话：「我更需要自动化体验」，要求「运行环境已有沙盒就关掉 Chrome 沙盒，没有就别关」），**授权不外溢到其他工具**。
+`--no-sandbox` 会降低子进程隔离等级。本机用户已对 **agent-browser / Chrome** 明确授权（原话：「我更需要自动化体验」，要求「运行环境已有沙盒就关掉 Chrome 沙盒，没有就别关」），**授权不外溢到其他工具**。**现行默认不需要关闭它**：浏览器调用走提权执行并保留原生沙盒（见 `browser-automation-safety` skill）；下表是「确需在受限沙盒内起子进程」时的判定口径与授权范围。
 
 | 运行环境 | 处置 |
 |---|---|
@@ -69,7 +69,7 @@ DSH 沙盒问题第一入口。**本机唯一首选解法：凡是「某个 home
 # 成功 (exit 0)                                → 无外层沙盒 ⇒ 保留原生沙盒
 ```
 
-已固化在 `~/.local/bin/agent-browser` 包装器（`AGENT_BROWSER_CHROME_SANDBOX=native` 可强制保留原生）。**其他工具不适用此自动逻辑**，要关内层沙盒仍须先取得用户对该工具的明确同意。
+该自动注入逻辑现已从 wrapper 移除（现行路径：对单条命令提权执行、保留原生沙盒，见 `browser-automation-safety`）。**其他工具不适用此判定逻辑**，要关内层沙盒仍须先取得用户对该工具的明确同意。
 
 ## 五、边界（禁止事项）
 
@@ -78,7 +78,4 @@ DSH 沙盒问题第一入口。**本机唯一首选解法：凡是「某个 home
 - **不得跳过功能验证**：失败就说明原因，不得用降级工具链、禁用检查等方式制造通过假象。
 - 连插件配置都覆盖不到时（路径硬编码且无配置面、嵌套沙盒不可关）：向用户请求对**单条命令**的 `danger-full-access` 提权，并说明为何前面几条不适用。审批是设计好的用户决策点，不是障碍。
 - `git worktree remove` 报 `Permission denied` 且残留 Go 模组缓存时：Go 模块缓存文件是 0444 只读，`chmod -R u+w <worktree>` 后再删（旧 worktree 的 `.workwork/` 缓存可能残留此类文件）。
-
-## 六、历史（已废弃：2026-10 之前的 workspace 重定向做法）
-
-装插件前本机常用「把 `GOCACHE`/`GOMODCACHE`/`npm_config_cache`/`HVIGOR_USER_HOME`/`DOCKER_CONFIG`/`ANDROID_USER_HOME`/`HOME` 等重定向到 `.workwork/`」规避 home 不可写。**该做法已全部废弃**：不要再写这类 export，也不要再把它记录进文档/skill。遇到目录不可写，按第一节加配置即可。
+- **反模式**：用 `GOCACHE`/`GOMODCACHE`/`npm_config_cache`/`HVIGOR_USER_HOME`/`DOCKER_CONFIG`/`ANDROID_USER_HOME`/`HOME` 重定向到 `.workwork/` 规避 home 不可写——已全部废弃，不要再写这类 export，也不要记进文档/skill；目录不可写按第一节加配置即可。

@@ -44,5 +44,5 @@ description: 下载依赖、访问被墙站点、配置镜像源与代理的规�
   2. 对照 `curl --noproxy '*'` 直连 `https://speed.cloudflare.com/__down?bytes=10000000`：实测 1.79 MB/s，说明本机→CF 边缘线路健康；**注意本机 ~/.zshrc 全局设了 http_proxy，测"直连"必须显式 --noproxy，否则数据全是走代理的假象**（本次曾因此误判为 CF 被限速）。
   3. 协议层排除法：把 config 复制改 alpn（h3→h2）、xhttp mode（packet-up→stream-up）、换端口起临时 xray 实例对照下载，吞吐无差别（~10-25KB/s）→ 排除 ALPN/模式，锁定中转服务器（源站）一侧带宽/回源问题，需机场方或上服务器排查，本地配置无需改动。
   4. 本地 xray 健康：`log show --predicate 'process CONTAINS "xray"' --last 40m` 无 warn/error 也支持此结论。
-  5. 对照实验配置按 ~/work/xray/AGENTS.md 放 .workwork/；诊断用临时端口（11808/11809、12808/12809），xray 多实例监听同端口不报错但会分流，必须各用一套端口，测完 kill。
+  5. 对照实验配置放项目 `.workwork/`；诊断用临时端口（11808/11809、12808/12809），xray 多实例监听同端口不报错但会分流，必须各用一套端口，测完 kill。**xray 项目位置等本机机器事实见 `local-environment` skill**。
 - 使用前先探活：`curl -s -o /dev/null -w '%{http_code}' -x http://127.0.0.1:10809 https://www.google.com/generate_204` 返回 204 才可用（另：本机 `no_proxy` 含 127.0.0.1，访问本机端口无需 `--noproxy`）；镜像源与代理都失败时停止并说明，不反复重试。

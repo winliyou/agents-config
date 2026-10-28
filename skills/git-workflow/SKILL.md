@@ -121,16 +121,15 @@ done
 - `git push` 成功 ≠ CI 通过。tag/分支推送后用 `gh run list --limit 3` 核对结论；
   需要失败日志时直接 `gh run view <id> --log-failed`
   （`~/.cache/gh` 已由 sandbox-extra-roots 放行；报 EPERM 就把该目录加进插件配置，见 `sandbox-adaptation`）。
-- CI 长期红会被「上次也是红的」麻痹成常态：AnyDLNA 的 Linux CI 因
-  `TestBundledToolDirFrom` 缺平台门控自 2026-09-20 起连挂 5 次（含纯文档提交）才被发现。
+- CI 长期红会被「上次也是红的」麻痹成常态：曾有项目 Linux CI 因某测试缺平台门控连续挂了 5 次（含纯文档提交）才被发现。
   看到连续失败必须先修再发，不许带红 tag 发布。
 - 同一 commit 双 run（tag 触发 + 分支触发）一绿一红，优先怀疑时间敏感用例 flaky：
   `gh run rerun <id>` 重跑确认；确认 flaky 后应修测试的时间阈值，而不是反复重跑。
-- **GitHub Billing 失败（已解决，2026-10-10）**：winliyou 账号曾因「recent account
+- **GitHub Billing 失败（已解决）**：GitHub 账号曾因「recent account
   payments have failed or your spending limit needs to be increased」导致私有仓库
   Actions 全部 3-13s 即败。**现行策略（用户已定：不再充值）：碰到该注解的失败
   直接忽略，不 rerun、不排查、不当发布阻塞；正确动作只有一个——把仓库转 public
-  走标准 CI**（public 仓库 Actions 免费不限额；已在该项目转 public 后核实）。
+  走标准 CI**（public 仓库 Actions 免费不限额；已在仓库转 public 后核实）。
   **不要走「私有仓库本地构建发版」的替代路径**——该兜底流程已被本策略废弃，
   不再维护其操作细节（历史做法见对应仓库的 git 历史；具体时间点/版本号属项目事实，
   写在项目侧文档，不记在本 skill）。
