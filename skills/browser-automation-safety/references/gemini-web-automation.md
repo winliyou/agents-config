@@ -73,6 +73,8 @@
 
 与上一节的差别：**不需要直连用户日常 Chrome** —— 走 wrapper 默认房客（owner = `profiles/main` headless，登录态已持久），全程零弹窗、零抢焦点。本节所有结论均在本机实测复现。
 
+**未登录形态（本机实测）**：owner profile 没有登录态时，Gemini 仍能附加图片（缩略图会出现），但附件处理会一直转圈、消息发不出去；且模型只有 Flash-Lite——要 Pro 质量与可靠附件处理，必须先让用户在 `profiles/main` 登录一次。
+
 **开箱可用脚本**：`.workwork/gemini-upload/gemini-image-ask.sh`（示例副本，可自行复制到别处；同目录 `README.md` 有完整排障笔记）。用法
 `./gemini-image-ask.sh -f <图片绝对路径> -p "<提示词>" [-o 输出目录] [-n 在当前对话继续]`。
 它已内置本节全部坑的规避与重试：可见性置前、CSS 选择器点击、菜单内注入、`naturalWidth` 校验、`textContent` + 停止按钮 + 长度稳定的三重完成判据。2026-10-15 实测端到端多轮成功（含"用户给的终端截图"识别为 Homebrew 阿里云镜像配置这类真实判据；单轮约 28-35 秒）。
@@ -148,8 +150,9 @@ agent-browser eval 'var i=document.querySelector("gem-media-attachment img"); i&
 - **大文本 `Input.insertText` 超时 ≠ 插入失败（同日实测，28.6K 中文字符 + 代码块）**：CDP 调用 30s 超时抛错，但重连后读 `.ql-editor` 的 `textContent.length` 与头尾内容，确认**文本已全部插入**（渲染进程忙于处理大文本，响应没赶回来）。**先查状态再决定是否重试**——盲目重发会让输入内容翻倍。
 - **渲染器迟缓是连锁的（同日实测）**：insertText 超时后紧接着 `Input.dispatchMouseEvent` 也超时（同一渲染进程忙）。此时轻量 `Runtime.evaluate`（20s 超时）始终可用，判障/读状态/兜底发送全走它；`dispatchMouseEvent` 只留给必须真实指针的场景（开菜单、选模型）。后台 gradle 构建抢 CPU 会显著加剧迟缓，审查流水线别与其并发。
 - **大 prompt 整份插入会被重复执行（2026-10-16 某媒体项目 UI 审查实测，接上条的反面）**：46KB 单次 `agent-browser keyboard inserttext` 后，`.ql-editor` 里出现 **4 份完全相同**文本（textContent 长度 161,772 ≈ 4×41K 字符）——即这次调用被重试，而**每次都已写入成功**，与上条"超时≠失败"是同一机制的另一面。规避：**先精简再发**（同一份内容改发"增量 diff"版 5.8KB，单份通过、秒级完成）；必须发大文本时**分段插入**，每段后 eval 统计目标串出现次数与总长度，发现多份就重载页面（`open` 同一 URL 会清空 composer 但保留线程）重来。
-- 回答容器：`model-response`（或 `[class*=model-response]`）。轮询其长度，`[aria-label*=停止]` 消失即完成（Argon 高点实测 <1 分钟）。
+- 回答容器：**精确标签** `model-response`。**禁用 `[class*=model-response]`**——属性包含选择器会同时匹配嵌套的 `response-container` / `model-response-content` 等容器，同一回答被重复计数（实测同页精确标签 2 个时该选择器数到 6 个，一个回答被数成 4 个）；若配合 `slice(beforeCount)` 做基线，会把已有回答当新回答或漏掉新回答，轮询永远等不到「新增」。轮询精确标签数量，`[aria-label*=停止]` 消失即完成（Argon 高点实测 <1 分钟）。
 - **完成判据不能只看"长度 > N"（2026-10-15 实测踩坑）**：写死 `length > 20` 会让**短回答**白等满全部轮次——实测 Gemini 答"主色调为深绿色和亮绿色。"（13 字符）、"深绿色"（3 字符）、"有"（1 字符）都是正常完整回答。正确判据是三条件并列：① 长度 > 0；② 页面上没有"停止"按钮（`[aria-label*=停止],[aria-label*=Stop]` 计数为 0 = 生成已结束）；③ 长度连续 2 次不变。修正后同场景耗时由 4 分钟降到 28 秒。
+- **完成判据脚本必须返回布尔值（本机实测踩坑）**：判据写成 `return !!stop` 并走 `returnByValue`；**不要返回字符串**——`String(!!stop)` 得到 `"false"` 在 JS 里仍是真值，调用侧 `if (!stopping)` 永不成立，轮询只能跑满超时（实测卡死 40+ 分钟，页面其实早有回答）。
 - **必须读 `textContent`，不要读 `innerText`（2026-10-15 实测更正）**：无头浏览器里后台标签的 `innerText` **返回空**——实测 `model-response` 的 `innerText.length` 只有 8（就是 "Gemini 说" 这几个字），而 `textContent.length` 有 513。用 innerText 轮询会**永远判不出回答已生成**，误以为"Gemini 没回答"。此前的"轮询 innerText.length"结论只在前台标签成立。
 - **取正文要剥离"非正文"节点，别只删 `img`**（2026-10-15 二次定位）：污染源其实是回答末尾的**引用来源卡片** `<sources-carousel-inline><source-inline-chip><span class="source-title">PNG</span><span class="source-count">+ 2</span>`，拼进正文后是 `…位于画面的中上方。   PNG+ 2`——**看着像图片 alt，实际是来源标签**（第一次排查被它带偏过）。稳妥的 `cloneNode(true)` 后剔除列表：
   `img,svg,source,picture,sources-carousel-inline,sources-list,source-footnote,source-inline-chip,response-actions,message-actions,gem-icon-button,mat-icon,thinking-overlay`
