@@ -1,6 +1,6 @@
 ---
 name: svelte-testing-pitfalls
-description: Svelte 5 编译/样式作用域与组件测试踩坑：注释里的标签字面量让编译器误报脚本块未闭合、@keyframes 被重命名导致内联 animation 与 animationend 失效、全局 runes store 响应式串扰与断言技巧、模板引用未导入标识符导致应用挂载崩溃且 vite build 不报错、模块导出 $derived 报 derived_invalid_export。触发：svelte-check 报 `<script>` was left open / element_unclosed；组件动画不播放或 animationend 不触发；内联 style 里写 animation；组件测试中切换 store 状态后断言 DOM；@testing-library/svelte 多次 render 对比；页面空白且控制台 ReferenceError；build 通过但界面不渲染。
+description: Svelte 5 编译/样式作用域与组件测试踩坑：注释里的标签字面量让编译器误报脚本块未闭合、@keyframes 被重命名导致内联 animation 与 animationend 失效、全局 runes store 响应式串扰与断言技巧、模板引用未导入标识符导致应用挂载崩溃且 vite build 不报错。触发：svelte-check 报 `<script>` was left open / element_unclosed；组件动画不播放或 animationend 不触发；内联 style 里写 animation；组件测试中切换 store 状态后断言 DOM；@testing-library/svelte 多次 render 对比；页面空白且控制台 ReferenceError；build 通过但界面不渲染。
 ---
 
 # Svelte 5 编译/样式作用域与组件测试踩坑

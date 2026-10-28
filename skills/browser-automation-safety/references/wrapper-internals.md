@@ -119,8 +119,8 @@ CDP=$(agent-browser get cdp-url | tail -1)
 
 | 执行环境 | `command -v node` | 直接执行 `agent-browser.js --version` |
 |---|---|---|
-| PATH 含 `/Users/liyou/.nvm/versions/node/vX/bin` | 找到 | `agent-browser 0.38.2` ✅ |
-| PATH 不含 nvm（如手写的 `/Users/liyou/.bun/bin:/opt/homebrew/bin:/usr/local/bin:...`） | 找不到 | `env: node: No such file or directory` ❌ |
+| PATH 含 `~/.nvm/versions/node/vX/bin` | 找到 | `agent-browser 0.38.2` ✅ |
+| PATH 不含 nvm（如手写的 `~/.bun/bin:/opt/homebrew/bin:/usr/local/bin:...`） | 找不到 | `env: node: No such file or directory` ❌ |
 
 失败连锁：所有 `[REAL, ...]` 调用 exit 127 → `bootstrapOwner()` 静默失败 → owner 永远起不来 →
 `waitForPort()` 每条命令等满 20 秒。
