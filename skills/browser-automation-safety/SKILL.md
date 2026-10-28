@@ -33,7 +33,7 @@ description: 浏览器自动化安全约定与防弹窗红线（本机）：一�
 - **正常用法就是什么都不加**：不要为"隔离"手写 `tab new` 或改 session；**不要传 `--cdp`**（wrapper 已注入；漏传/自传都会破坏绑定——`--cdp` **不是 sticky**，漏传一次该 session 就掉回 owner 并顶掉别人页面）。
 - **跑批 / 长会话劣化**：用独立实例 `AGENT_BROWSER_GLOBAL_SESSION=<项目固定名> agent-browser <命令>`（自带 `profiles/<名>`），用完 `agent-browser --session <名> close` 即还。
 - **显式 `--session` / `--profile` 一律尊重**，既有项目用法不受影响。
-- **任务中途不要重建 owner daemon**（等待用 `--default-timeout` / `wait` / `eval` 轮询，绝不靠 kill 重启；owner 重建会使所有房客绑定失效）。
+- **任务中途不要重建 owner daemon**（等待用 `wait <ms>` / `eval` 轮询，必要时 `AGENT_BROWSER_DEFAULT_TIMEOUT=<ms>` 放宽操作超时；绝不靠 kill 重启——owner 重建会使所有房客绑定失效）。
 - 需要退回旧的 shared 单例行为：`AGENT_BROWSER_GUEST_MODE=0`。
 
 **close 硬闸**：wrapper 只拦**显式 `--session shared`** 与 `close --all`（一律），exit 1 并提示正确做法；**房客 `close` 放行**（合法自清理）。逃生门 `AGENT_BROWSER_ALLOW_CLOSE_SHARED=1`，仅在确认无其他会话使用时用。四个冲突源（`close` 落在 owner＝关掉全机浏览器、`close --all` 连带关跑批实例、同 session 内 `open` 走当前 tab、daemon 空闲 1h 回收）与注入细节见 `references/wrapper-internals.md`。
@@ -67,7 +67,7 @@ description: 浏览器自动化安全约定与防弹窗红线（本机）：一�
 ## 严禁事项（红线）
 
 1. **禁止抢焦点 / 置顶窗口**：不得调用任何 OS 级窗口激活（AppleScript `activate`、对已运行应用 `open -a`）。**`open -g` 不等于安全**：它只保证冷启动不进前台，对已运行 app 仍会激活窗口（实测）；同理守卫拉起 GUI 必须带 `-n`，否则会被已在跑的 headless 吞掉事件（见 `references/dock-and-focus-guard.md`）。不得打断用户的键鼠输入，**禁止把默认改回 headed**；确需真窗口须先确认用户可被打扰。
-2. **禁止强切用户当前活动标签页**：严禁 `set active tab` 或粗暴切走用户正在浏览/看视频的页面。
+2. **禁止强切用户当前活动标签页**：严禁用 `tab <t<N>>` 切走用户正在浏览/看视频的页面（`agent-browser tab <id>` 就是切换/激活标签）。
 3. **禁止 `--auto-connect` / `--cdp 9222` 连用户日常 Chrome**（除用户明确要求）：外部 CDP attach 会让 Chrome 弹「有应用正在请求远程控制」，**每次重连都会再弹一次**。
 4. **禁止杀 daemon 后重连，禁止一切重建 CDP 连接的形式**（pkill daemon、重开 WS 握手、重新 attach、重启浏览器），尤其禁止写进重试循环——每条新 DevTools 握手都会再弹一次窗，N 次重建 = N 次弹窗轰炸，自动化全废。
 5. **禁止 `close --all`；禁止关闭 owner**。普通 `agent-browser close` 只关自己会话的 tab 与 daemon，是合法自清理，无需也不应加 session 参数。
@@ -82,7 +82,7 @@ agent-browser --auto-connect <命令>          # 等价：AGENT_BROWSER_CDP=9222
 **仅当用户明确要求**操作其**已登录的日常 Chrome** 时才用，AI 不得自行选择此模式。
 
 - **前提**：先确认端口在监听（`lsof -iTCP:9222 -sTCP:LISTEN`）；不在时报告用户，**不要自行重启用户的 Chrome**。
-- **防弹窗**：连接建立后 daemon 必须长驻复用；等待放宽 `--default-timeout` 或用 `wait`/`eval` 轮询，**绝不销毁 daemon 重建**；对日常 Chrome 的 CDP 握手失败一次即停（细则见 `references/gemini-web-automation.md`）。
+- **防弹窗**：连接建立后 daemon 必须长驻复用；等待用 `AGENT_BROWSER_DEFAULT_TIMEOUT=<ms>` 放宽操作超时、或用 `wait`/`eval` 轮询，**绝不销毁 daemon 重建**；对日常 Chrome 的 CDP 握手失败一次即停（细则见 `references/gemini-web-automation.md`）。
 - `/json/version`、`/json/list` 返回 404 属正常（新版 Chrome 对默认 profile 的安全限制），WebSocket 端点可用即连接有效。
 - **只是需要登录态时不要 attach 日常 Chrome**：改用独立 profile 并首次登录一次（登录态长期保留在该 profile 目录），避免反复握手弹窗。
 
@@ -131,7 +131,7 @@ agent-browser --auto-connect <命令>          # 等价：AGENT_BROWSER_CDP=9222
 ## 受限沙盒下执行（提权）
 
 - 一切 `agent-browser` 调用（含纯查询的 `session info`，也要连 socket）在 `workspace-write` 沙盒内会因 `~/.agent-browser` 不可写被 wrapper **硬失败拦截**（exit 1）。此时对**该条命令**申请 `danger-full-access` 提权执行即可，**不要绕行**（不改启动参数、不重定向目录、不把 `~/.agent-browser` 加进 `extraWritableRoots`——放行会让它在沙盒内误启动、Chrome 因嵌套沙盒起不来）。
-- **用户偏好（优先级最高）**：启动浏览器尽量不改动任何启动参数——凡会 spawn 浏览器的调用一律申请提权；提权后 wrapper 探测到无外层沙盒即保留 Chrome 原生沙盒。daemon socket 位置由首启环境固化，故同一 session 的后续命令都要同环境（提权）执行。
+- **用户偏好（优先级最高）**：为绕沙盒**不要改动任何启动参数**（业务确有需要的 ARGS，如帧驱动三件套，见 `references/headless-e2e.md`）——凡会 spawn 浏览器的调用一律申请提权；提权后 wrapper 探测到无外层沙盒即保留 Chrome 原生沙盒。daemon socket 位置由首启环境固化，故同一 session 的后续命令都要同环境（提权）执行。
 - **反模式（已废弃）**：用目录重定向（`AGENT_BROWSER_SOCKET_DIR` / `--profile` / `HOME`）+ 自动注入 `--no-sandbox` 来绕沙盒——该自动机制已从 wrapper 移除，现行行为就是报错退出提示提权。技术背景仍成立：外层已有沙盒时 Chrome 内层沙盒无法 apply（只加 `--no-sandbox` 即可启动，`--disable-gpu` 非必需），所以正确路径是提权后保留原生沙盒；另注意重定向 `HOME` 对 macOS Chrome 无效（用 `NSHomeDirectory()` 定位配置目录，不读 `HOME`）。目录写权限需求按 `sandbox-adaptation` 走插件配置 `extraWritableRoots`。
 - **嵌套陷阱**：`run_code` program 上声明的 `sandbox_permissions` **不会传导给内层 `tools.bash`**；单独给内层传也可能不生效（该参数语义是「对刚被拒的命令做一次性重试」）。可靠路径：顶层 program 拿到提权后，在 program 内用 `node:child_process` 直 spawn wrapper——spawn 时必须显式补全 `HOME`、`PATH`、固定 `DSH_SESSION_ID` 三个 env（缺任一导致 ENOENT / exit 126-127 / session 漂移）。完整对照与验证用 env 见 `references/wrapper-internals.md`。
 

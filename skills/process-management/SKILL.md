@@ -16,5 +16,5 @@ description: 长驻进程与工具的启停规范：启动前先检查复用、�
 - 现象：`( for i in 1 2 3; do (死循环) & done ) 2>/dev/null ` 这种「子 shell 内后台化负载」的写法，回到主 shell 再 `LOADPIDS=$(jobs -p)` 取到的是空列表（那些后台进程不是主 shell 的 job），`kill $LOADPIDS` 落空；主脚本正常退出后，负载子 shell 被过继给 launchd，每个 ~80% CPU 永久空转。活动监视器里表现为多个同名 bash、父进程 launchd(1)、无 TTY，argv 仍是整段复合脚本（fork 不改 argv，别被命令行骗了）。
 - 判定：`ps -o pid,ppid,pgid,pcpu,time,command -p <PID>` 出现 PPID=1、TTY=?、PGID 指向已退出的进程、CPU 持续高，即为孤儿 fork 子 shell；用 `pgrep -fl '脚本特征串'` 找出同批全部 PID。
 - 溯源（AI 会话泄漏的进程）：在 `~/.dsh/sessions/<工作区目录>/<会话id>/session.v4.jsonl.zstd` 上 `zstd -dc | grep '特征串'`，按事件时间戳反查提交会话（`session_search` 超时时的兜底手段）。
-- 正确做法：负载进程必须在**主 shell 层**直接后台化并逐个记 PID（`for i in 1 2 3; do loop & pids+=("$!"); done`，收尾 `kill "${pids[@]}"`）；或对整组用进程组信号（`kill -- -$PGID`）。带负载的后台脚本收尾必须 `pgrep` 复查无残留才算结束。
+- 正确做法：负载进程必须在**主 shell 层**直接后台化并逐个记 PID（`for i in 1 2 3; do loop & pids+=("$!"); done`，收尾 `kill "${pids[@]}"`）；或对整组用进程组信号（先取 PGID：`PGID=$(ps -o pgid= -p <脚本PID> | tr -d ' ')`，再 `kill -- -$PGID`；`$PGID` 不是 shell 内置变量，不会自动存在）。带负载的后台脚本收尾必须 `pgrep` 复查无残留才算结束。
 - 验证方式：2026-10-26 本机实测：泄漏的 3 个 bash 空转约 1 小时（每进程累计 ~50 分钟 CPU），ps 确认 PPID=1、pcpu≈80%；修复后以 `pgrep -fl 特征串` 无输出为清理完成标准。

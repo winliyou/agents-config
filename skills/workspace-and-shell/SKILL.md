@@ -58,7 +58,7 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 s
 
 ## macOS/BSD 工具链与解析规范
 
-1. `cat -A` 不存在（GNU 专属）→ 用 `cat -ev`；GNU 专属选项先验证再用。
+1. `cat -A` 不存在（GNU 专属）→ 用 `cat -evt`（BSD 等价于 `-vET`：`-e` 行尾 `$`、`-t` 制表符 `^I`、`-v` 不可打印字符；只写 `-ev` 不显示制表符）；GNU 专属选项先验证再用。
 2. grep 模式以 `-` 开头必须 `grep -e` 加模式（或 `--` 分隔）——本次 `->` 前缀报 invalid option，端口自愈链因此失效一轮。
 3. grep 多 pattern 用多个 `-e`，不用 BRE 的「\|」——中文行内容时「\|」会整段漏匹配，导致误判「文件未修改」（本次误报一次）。
 4. **统计进程/对象禁止按命令行关键词 grep 计数**：daemon 进程名统一（如 agent-browser-darwin），按 session 名 grep 恒为数 0（实际 2 个，本次误判「无残留」）；按「Google Chrome」计数把用户日常浏览器混进来（误报双实例）。用 `lsof -p <pid>` 看 fd/sock 归属，或 `pgrep -f 完整特征串`。
@@ -68,7 +68,7 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 s
 
 ## 检索审计：显式补查 gitignored 目录
 
-内容检索工具（grep/rg 系）默认遵守 `.gitignore`：`.worktrees/`、`.workwork/`、`node_modules/` 会被静默跳过（2026-10-27 实测）。
+内容检索工具（DSH 的 grep 工具，ripgrep 内核）默认遵守 `.gitignore`：`.worktrees/`、`.workwork/`、`node_modules/` 会被静默跳过（2026-10-27 实测）；系统 `grep -r` 不读 `.gitignore`，会照常搜到这些目录，不能拿它的结果判断「主检索」范围。
 
-- 做「全库有没有用 X」类审计时，**主检索之外必须按目录显式补查这两类路径**（如 `grep -rl 关键字 <项目>/.worktrees <项目>/.workwork`），并核对结果总数是否触达工具的返回上限。
+- 做「全库有没有用 X」类审计时，**主检索之外必须按目录显式补查这两类路径**（如 `grep -rl 关键字 <项目>/.worktrees <项目>/.workwork`；或对 DSH grep 工具显式传目录路径——显式路径不受 ignore 过滤），并核对结果总数是否触达工具的返回上限。
 - 实测一次审计因此漏掉 30 个引用文件（含整个 worktree 的脚本副本），导致「某模式只有 A 项目在用」的结论险些失真；依赖类冲突（playwright/puppeteer）还要查 lockfile，不能只 grep 源码。

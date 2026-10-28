@@ -53,7 +53,7 @@ description: 本机环境事实：macOS 路径、已装工具、凭据归档位�
 
 ## DSH 环境与插件
 
-- **DeepSeek Harness `app.asar` 解包（2026-10-19 实测）**：官方打包的 `/Applications/DeepSeek Harness.app/Contents/Resources/app.asar` 数据区起点是 `16 + align4(headerSize)`，**不是** `16 + headerSize`——本机 `headerSize=4780386`（非 4 的倍数）差 2 字节填充，按后者解出的每个文件首部多 2 字节、尾部少 2 字节：`grep` 看不出问题，字节级比对或 read 会报 invalid UTF-8。已按 header 内每个 entry 的 `integrity.hash`（SHA256）逐文件校验的提取器：`~/.agents/skills/local-environment/scripts/extract-asar.mjs`（用法 `node extract-asar.mjs <outdir> <pathRegex>`，输出 `integrity_bad` 必须为 0 才可信）。
+- **DeepSeek Harness `app.asar` 解包（2026-10-19 实测）**：官方打包的 `/Applications/DeepSeek Harness.app/Contents/Resources/app.asar` 数据区起点是 `16 + align4(headerSize)`，**不是** `16 + headerSize`——本机 `headerSize=4748698`（非 4 的倍数；该数值随 App 版本变化）差 2 字节填充，按后者解出的每个文件首部多 2 字节、尾部少 2 字节：`grep` 看不出问题，字节级比对或 read 会报 invalid UTF-8。已按 header 内每个 entry 的 `integrity.hash`（SHA256）逐文件校验的提取器：`~/.agents/skills/local-environment/scripts/extract-asar.mjs`（用法 `node extract-asar.mjs <outdir> <pathRegex>`，输出 `integrity_bad` 必须为 0 才可信）。
 - **`dsh` CLI 的 profile 写入红线与插件离线实测（2026-10-19 实测）**：`dsh` 任何子命令在 profile prepare 阶段都会**写** `$DSH_HOME`（沙盒内直接跑 `dsh web --help` 即 `EPERM ... ~/.dsh/profiles/<name>/cordis.yml`）→ 跑 `dsh` 前必须先 `DSH_HOME=<workspace 内副本>`。`~/.dsh/profiles/<name>` 用的是 pnpm `nodeLinker: hoisted`（见其 `pnpm-workspace.yaml`），`node_modules/@chaoset/*` 是**实体目录不是符号链接**，因此验证本地插件改动**不必**走会联网重解依赖的 `dsh plugin add`：rsync 复制 profile 到 workspace 内副本后，原地覆盖该包 `files` 清单（`lib`、`client`、`cordis.patch.yml`、`package.json`、README/CHANGELOG/LICENSE）即可离线升级（实测 `DSH_HOME=<副本> dsh web --port <空闲端口> --no-open` 约 1 秒起，`curl` 插件路由可用）。副本内含 `.credentials.yaml` 等凭据，验证后必须删除；`dsh web` 启动打印的 URL 带 `token=`，留日志前必须 REDACT（`/` 直接 GET 是 401 `dsh web authentication required`，需带 `?token=` 走 303 换 cookie）。
 - **DSH profile 与插件配置（2026-10-27 核实）**：桌面 App（GUI 对话）用 `~/.dsh/profiles/desktop/`，
   `dsh web` 用 `~/.dsh/profiles/web/`；`sandbox-extra-roots` 的 `extraWritableRoots` 等插件配置
@@ -85,8 +85,8 @@ description: 本机环境事实：macOS 路径、已装工具、凭据归档位�
 
 ## 各仓库包管理器用料（会漂移，以仓库现状为准）
 
-本机 JS/TS 存量仓库当前大致是 **3 个 bun / 3 个 pnpm（均 `packageManager: pnpm@12.4.2`）/ 2 个 npm**，
-另有若干混合仓。**不在此处列仓库名**（项目事实写在各项目自己的 `AGENTS.md`）：动手前查该仓
+本机 JS/TS 存量仓库混用 **bun / pnpm / npm**（实测含子项目共 5 个 `bun.lock`、3 个 `pnpm-lock.yaml`、3 个 `package-lock.json`；pnpm 仓多声明 `pnpm@12.4.2`，且会漂移），
+另有若干无 lockfile 的混合仓。**不在此处列仓库名**（项目事实写在各项目自己的 `AGENTS.md`）：动手前查该仓
 `package.json` 的 `packageManager` 字段或 lockfile 即可，结论永远以仓库现状为准。
 > 规则（通用部分）见 `toolchain-setup` skill：`packageManager` > lockfile > 新项目一律 bun；
 > **不要**因为"一律 bun"去改动已用 pnpm/npm 的存量仓库。

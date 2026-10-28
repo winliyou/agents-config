@@ -104,14 +104,13 @@ Svelte 会给组件样式块里的 `@keyframes` **加作用域前缀**（`toastI
   写了 `onclick={fetchPeers}` 而 import 清单漏了它。
 - `vite build`（rolldown + svelte 插件）与 `svelte-check` 默认都不拦
   （未定义全局是合法 JS）。**只有真实浏览器运行才暴露**。
-- 排障套路（无需任何测试框架）：
+- 排障套路（无需任何测试框架；浏览器操作一律走 `agent-browser`，红线见 `browser-automation-safety` skill，禁止直接 spawn Chrome）：
   ```bash
-  chrome --headless --user-data-dir=<workspace 内目录> \
-    --enable-logging=stderr --v=0 --virtual-time-budget=12000 \
-    --dump-dom http://127.0.0.1:PORT/ 2>err.log
-  grep -i CONSOLE err.log          # 直接看到 ReferenceError 与出错文件
+  agent-browser open http://127.0.0.1:PORT/
+  agent-browser errors                     # 直接看到 ReferenceError 与出错文件
+  agent-browser console                    # 页面 console 输出
+  agent-browser screenshot /tmp/page.png   # 空白背景色 vs 完整 UI 前后对比
   ```
-  配合 `--screenshot` 前后对比（空白背景色 vs 完整 UI）确认修复。
   截图字节数也是快速信号：空白页仅 ~5KB，正常渲染 100KB+。
 
 ### 预防
@@ -124,8 +123,8 @@ Svelte 会给组件样式块里的 `@keyframes` **加作用域前缀**（`toastI
 
 （2026-10-08 实测）
 
-- 多个 edit 用 `Promise.all` 并发改**同一文件**会静默丢失部分 edit——同文件多处修改
-  串行执行，或一次 node 脚本完成；
+- 同一文件的多处修改一律**串行**执行或一次脚本完成：早期实测 `Promise.all` 并发 edit
+  同一文件曾静默丢失部分改动；当前 DSH 会把写操作串行化，但不要依赖竞态行为；
 - edit 工具 old_string 报 not found 但文本肉眼可见存在时，直接 node 正则替换更快；
 - bun install 在沙盒内报 `unable to write files to tempdir: EPERM`：错误文案有误导，真因是包缓存目录
   不可写；把该目录加进 sandbox-extra-roots 配置即可（见 `sandbox-adaptation`），不要重定向 `TMPDIR`（无效）。

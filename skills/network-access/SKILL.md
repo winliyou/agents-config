@@ -21,12 +21,12 @@ description: 下载依赖、访问被墙站点、配置镜像源与代理的规�
 - 无镜像源的资源用本地 xray 代理：HTTP `http://127.0.0.1:10809`，SOCKS5 `socks5://127.0.0.1:10808`（注意：10809 只接受 HTTP 协议，SOCKS5 在 10808）。
   - **Docker / OrbStack 例外**：`docker pull` 由 daemon（VM 内）发起，**不读 shell 的 http_proxy/https_proxy**，也不读 macOS 系统代理的 shell 副本；daemon 实际走 OrbStack 内置 `proxy.orb.internal:8305`，由 `orbctl config set network_proxy <url>` 控制（默认 `auto` 跟随 macOS 系统代理，本机系统代理为关）。国内直连 Docker Hub 会 502，需显式：
     `orbctl config set network_proxy http://127.0.0.1:10809`（详见 `local-environment` 的代理环境一节）。
-  - **`gh` 只认大写代理变量（2026-10-12 实测）**：`~/.zshrc` 配的是小写
-    `http_proxy/https_proxy`，但 `gh`（Go 程序）**不读小写**——表现为
-    `gh run list` 稳定报 `net/http: TLS handshake timeout`，而 `curl -x
-    http://127.0.0.1:10809 https://api.github.com/...` 同一时刻返回 200。
-    判据：代理探活正常（`curl -x ... https://www.google.com/generate_204` 得
-    204）但 `gh` 仍超时 ⇒ 改用大写重试：
+  - **`gh` 走代理异常时先显式传大写变量（2026-10-12 实测）**：`~/.zshrc` 配的是小写
+    `http_proxy/https_proxy`；实测 `gh run list` 稳定报 `net/http: TLS handshake timeout`，而
+    `curl -x http://127.0.0.1:10809 https://api.github.com/...` 同一时刻返回 200。
+    **真因未定位**（Go 标准库其实大小写都读，见 `net/http/httpproxy` 的 `getEnvAny`），
+    不要据此推断机制。判据：代理探活正常（`curl -x ... https://www.google.com/generate_204` 得
+    204）但 `gh` 仍超时 ⇒ 显式传大写重试：
 
     ```bash
     HTTPS_PROXY=http://127.0.0.1:10809 HTTP_PROXY=http://127.0.0.1:10809 \
@@ -35,7 +35,7 @@ description: 下载依赖、访问被墙站点、配置镜像源与代理的规�
 
     不要叠加 `ALL_PROXY` 或清空 `NO_PROXY`（实测那样反而又失败）；
     替代方案是用 `curl -x` 直接打 GitHub REST API。
-  - **现状提示**：`~/.zshrc:106-107` 已 `export http_proxy/https_proxy=http://127.0.0.1:10809`（全局生效），且已设 `no_proxy=localhost,127.0.0.1,::1`——即本机当前**就是**全局代理策略。下述"只对单条命令临时生效"是更保守的替代做法，不是当前现状；不要因为"禁止全局代理"的旧措辞去改动用户已配置好的 shell。
+  - **现状提示**：`~/.zshrc:106-107` 已 `export http_proxy/https_proxy=http://127.0.0.1:10809`（全局生效），且运行环境已注入 `no_proxy=localhost,127.0.0.1,::1`（`env` 实测存在，不在 `~/.zshrc` 内）——即本机当前**就是**全局代理策略。下述"只对单条命令临时生效"是更保守的替代做法，不是当前现状；不要因为"禁止全局代理"的旧措辞去改动用户已配置好的 shell。
   - 单条命令临时指定：命令前缀 `http_proxy=http://127.0.0.1:10809 https_proxy=http://127.0.0.1:10809 <命令>`，curl/wget 用 `-x`。
   - git 按域名局部配置代理（仓库内 `--local`）：`git config http.https://github.com/.proxy http://127.0.0.1:10809`；不设全局 `http.proxy`。
 

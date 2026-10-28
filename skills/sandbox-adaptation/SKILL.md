@@ -35,7 +35,7 @@ DSH 沙盒问题第一入口。**本机唯一首选解法：凡是「某个 home
 
 ## 二、不是「目录权限」的沙盒问题
 
-1. **嵌套沙盒冲突**（Chrome/Chromium、容器运行时自己的沙盒）：报错 `Failed to initialize sandbox` / `sandbox initialization failed: Operation not permitted` / GPU 进程崩溃，或表层只报 `CDP response channel closed`。目录重定向无效；按 `browser-automation-safety` 的环境判定规则处理。
+1. **嵌套沙盒冲突**（Chrome/Chromium、容器运行时自己的沙盒）：报错 `Failed to initialize sandbox` / `sandbox initialization failed: Operation not permitted` / GPU 进程崩溃，或表层只报 `CDP response channel closed`。目录重定向无效；现行正解是提权执行并保留原生沙盒（判定口径见本 skill 第四节；`browser-automation-safety` 只讲浏览器侧红线）。
 2. **daemon/子进程在沙盒内起不来**（如 OrbStack `orbctl start` panic 在 `~/.orbstack/log` rename）：让 GUI/LaunchServices 拉起 daemon，不继承当前 shell 的限制：
    ```bash
    open -a OrbStack; sleep 5; docker info >/dev/null 2>&1 && echo docker-ok

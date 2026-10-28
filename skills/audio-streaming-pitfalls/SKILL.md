@@ -41,9 +41,9 @@ description: 跨设备实时音频流（采集→传输→播放）的正确架�
 ## 排障方法
 
 - 两端版本一致性先确认（/api/self 的 build_time），再看数据。
-- 抓前端实收 PCM：Chrome `--remote-debugging-port` → CDP `Network.enable` →
-  `Network.webSocketFrameReceived`（payloadData 为 base64，opcode 2 是二进制）→ numpy 分析
-  削波/超界样本/跳变分布/重复块/静音段/频谱。
+- 抓前端实收 PCM（浏览器实例的启动与 CDP 连接按 `browser-automation-safety` skill 红线：不得自行 spawn Chrome、
+  不写自研 CDP 管线）→ CDP `Network.enable` → `Network.webSocketFrameReceived`（payloadData 为 base64，
+  opcode 2 是二进制）→ numpy 分析削波/超界样本/跳变分布/重复块/静音段/频谱。
 - node 的 WebSocket 二进制帧默认是 Blob，必须显式 `ws.binaryType = 'arraybuffer'`（否则统计恒 0）。
 - 音频特征判断：真实音频为多频成分连续波形；恒定幅度周期信号或大量 DC 分量 = 非音频内容。
 

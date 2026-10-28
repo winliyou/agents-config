@@ -17,12 +17,12 @@ description: HarmonyOS / 鸿蒙真机与模拟器调试通用流程（hdc）：�
 
 ## 模拟器内存占用与实例配置
 
-- **为什么占内存大**（2026-10-23 实测，来源：`Emulator -help` 与实例 config.ini）：每个实例是一台完整 QEMU 虚拟机（实例目录 `~/.Huawei/Emulator/deployed/<名称>/`，含 `hardware-qemu.ini`），预置机型 profile 的 `hw.ramSize` 固定 4096（4 GB）+ 4 vCPU；系统镜像 HarmonyOS 7.0.0 的 system.img 有 3.6 GB。跑起来后 guest 内存大部分被真实占用，再加高分辨率图形缓冲，单实例进程 RSS 轻松 4–6 GB；同时开多个实例乘倍。
+- **为什么占内存大**（2026-10-23 实测，来源：`Emulator -help` 与实例 config.ini）：每个实例是一台完整 QEMU 虚拟机（实例目录 `~/.Huawei/Emulator/deployed/<名称>/`，含 `hardware-qemu.ini`），预置机型 profile 的 `hw.ramSize` 实测为 2048（2 GB）+ 4 vCPU（`Emulator -list -details` 与实例 `hardware-qemu.ini`；`Emulator -create` 的 `-memory` 默认值才是 4 GB）；系统镜像 HarmonyOS 7.0.0 的 system.img 有 3.6 GB。跑起来后 guest 内存大部分被真实占用，再加高分辨率图形缓冲，单实例进程 RSS 轻松 4–6 GB；同时开多个实例乘倍。
 - **预置实例的内存改不了**（`isCustomize=false`，UI 里也不能改），但 CLI 建新实例可自定内存：
   ```bash
   # -memory 取值 2~32 GB，默认 4；-storage 取值 2~1023 GB，默认 6
   Emulator -create LowMem -deviceType Phone \
-    -osVersion "HarmonyOS 7.0.0(26)" -memory 2 -screen "1080 2340 480 6.5"
+    -osVersion "HarmonyOS 7.0.0(26.0.0)" -memory 2 -screen "1080 2340 480 6.5"
   ```
   `-osVersion` 格式 `HarmonyOS <version>(<api_version>)`，须与已下载镜像一致（`Emulator -imageList` 查）。仅验证到 help/参数面，实际创建未跑过（避免在用户机上留实例）。
 - 其他相关参数：`-bootMode coldboot|reset|snapshot`（默认 Quick Boot 快照恢复会把 guest 状态整块拉回内存）、`-hotBoot <true/false>`、`-noWindow`。

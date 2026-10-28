@@ -128,7 +128,7 @@ CDP=$(agent-browser get cdp-url | tail -1)
 **排查口径**：不要在用户终端里验证（那里当然有 node），要在**实际跑 wrapper 的那个子进程环境**里验证：
 `env -i PATH="<该环境的 PATH>" /path/to/agent-browser.js --version`。
 
-**修复**（`~/.agents/bin/agent-browser` 第 63 行 + 5 处调用点）：
+**修复**（`~/.agents/bin/agent-browser` 第 63 行 + 全部调用点）：
 ```ts
 const JS_RUNNER = process.execPath;   // 本文件由 bun 执行 → 即 bun 绝对路径
 // 所有 [REAL, ...] → [JS_RUNNER, REAL, ...]
@@ -172,7 +172,7 @@ socket 与状态落点：`~/.agent-browser/*.sock`；默认目录不可写时 wr
 **wrapper 现行机制**：
 
 - **close 硬闸**：仅拦**显式 `--session shared`** 与 `close --all`（一律），exit 1 并提示正确做法；**房客 `close` 放行**（属合法自清理）。逃生门 `AGENT_BROWSER_ALLOW_CLOSE_SHARED=1`，仅确认无其他会话正在使用时用。
-- **空闲回收禁用**：默认注入 `AGENT_BROWSER_IDLE_TIMEOUT_MS=0`（env 名以 README Options 表为准，`_MS` 结尾，勿凭记忆写成 `IDLE_TIMEOUT`）；调用方显式传 `--idle-timeout` 或同名 env 时不覆盖。仅 owner 禁用。
+- **空闲回收禁用**：默认注入 `AGENT_BROWSER_IDLE_TIMEOUT_MS=0`（env 名以 README Options 表为准，`_MS` 结尾，勿凭记忆写成 `IDLE_TIMEOUT`）；调用方显式传 `--idle-timeout` 或同名 env 时不覆盖。**非房客**（owner 与显式独立实例）禁用；房客走 `--cdp` attach，豁免空闲回收、不会 1h 自退（见下条更正）。
   **2026-10-16 重大更正**：房客 daemon 也**不会 1h 自退**——房客走 `--cdp` attach，属上游"user-attached browsers"，**豁免空闲回收**（实测 `manual-*` daemon 存活 3h+ 仍健在）。旧文"房客 daemon 1h 自退、下次按 targetId 重挂"与实现不符，勿再采信。后果：房客的标签只能靠显式 `close`（wrapper 会先摘标签）或下方孤儿 tab 兜底清理回收，别等 daemon 自退。
 - **标签与状态不泄漏**（2026-10-15 修复）：close 前先摘掉该会话的 pinned tab，close 成功后再清残留状态文件（`.target`/`.config`）。**判别房客的依据**是该 session 的 daemon 是否 ESTABLISHED 连着 owner 端口——独立实例（自带 Chrome）不摘标签，它的标签随自己的 Chrome 消失。显式 `--session <房客名> close` 同样受此清理（修复前会泄漏标签并留下 `.target`）。
 - **孤儿状态文件兜底清理**：房客 daemon 若自行退出（空闲回收、被 kill），不会带走 `.target`/`.config`——实测曾累积 28 组。wrapper 每次调用会清掉"无活跃 socket **且**进程不存活"的会话状态文件；两个条件同时满足才删，active 会话与 owner 不受影响。
