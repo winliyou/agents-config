@@ -13,7 +13,7 @@ description: 移动端与 TV 端 UI 通用约定（跨 ArkUI / Compose / Android
 ## 1. 可操作面积不能小于触控下限
 
 - 可聚焦/可点击控件（按钮、chip、图标按钮、列表行）必须保证足够热区，**用约束最小尺寸而非固定高度**，避免被父布局压缩：
-  - ArkUI：`constraintSize({ minHeight })`，图标按钮用 padding 补足；官方底线 ≥40vp（推荐 46）
+  - ArkUI：`constraintSize({ minHeight })`，图标按钮用 padding 补足；热区下限取 ≥44vp（本机项目实测基线；「官方 40vp/推荐 46」在本地文档中未找到依据，不作为硬口径）；Android/Compose 侧常用 48dp 下限
   - Compose/TV：`requiredHeight` / `requiredSize`（`required*` 不被父级压缩），**不要**用普通 `height` / `size`
 - 图标按钮尤其容易踩：视觉尺寸可以小，但**热区必须补够**。
 

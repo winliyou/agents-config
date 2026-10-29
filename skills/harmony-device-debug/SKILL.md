@@ -24,7 +24,7 @@ description: HarmonyOS / 鸿蒙真机与模拟器调试通用流程（hdc）：�
   Emulator -create LowMem -deviceType Phone \
     -osVersion "HarmonyOS 7.0.0(26.0.0)" -memory 2 -screen "1080 2340 480 6.5"
   ```
-  `-osVersion` 格式 `HarmonyOS <version>(<api_version>)`，须与已下载镜像一致（`Emulator -imageList` 查）。仅验证到 help/参数面，实际创建未跑过（避免在用户机上留实例）。
+  `-osVersion` 格式 `HarmonyOS <version>(<api_version>)`，须与已下载镜像一致（`Emulator -imageList` 查）。`-screen` 的字段语义 `Emulator -help` 未给出（该示例串未在本地创建实例验证，用前先对照已下载实例 `config.ini` 的 resolution/density 字段）。仅验证到 help/参数面，实际创建未跑过（避免在用户机上留实例）。
 - 其他相关参数：`-bootMode coldboot|reset|snapshot`（默认 Quick Boot 快照恢复会把 guest 状态整块拉回内存）、`-hotBoot <true/false>`、`-noWindow`。
 - 省内存优先级：UI 开发用 Previewer > 有真机用无线调试 > 只开一个实例用完 `Emulator -stop <name>` > CLI 建 2 GB 低配实例。
 

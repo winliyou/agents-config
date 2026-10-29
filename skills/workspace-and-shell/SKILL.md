@@ -60,7 +60,7 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 s
 
 1. `cat -A` 不存在（GNU 专属）→ 用 `cat -evt`（BSD 等价于 `-vET`：`-e` 行尾 `$`、`-t` 制表符 `^I`、`-v` 不可打印字符；只写 `-ev` 不显示制表符）；GNU 专属选项先验证再用。
 2. grep 模式以 `-` 开头必须 `grep -e` 加模式（或 `--` 分隔）——本次 `->` 前缀报 invalid option，端口自愈链因此失效一轮。
-3. grep 多 pattern 用多个 `-e`，不用 BRE 的「\|」——中文行内容时「\|」会整段漏匹配，导致误判「文件未修改」（本次误报一次）。
+3. grep 多 pattern 用多个 `-e`（或 ERE 的 `|`）：`\|` 的正则方言不一致——默认 BRE 下是 alternation，`grep -E` 与 DSH grep 工具（ripgrep）下是字面量 `|`，会整段漏匹配，曾因此误判「文件未修改」（实测：系统 BSD grep 的 `\|` 两分支均命中；`grep -E 'a\|b'` 与 ripgrep 均 0 命中）。
 4. **统计进程/对象禁止按命令行关键词 grep 计数**：daemon 进程名统一（如 agent-browser-darwin），按 session 名 grep 恒为数 0（实际 2 个，本次误判「无残留」）；按「Google Chrome」计数把用户日常浏览器混进来（误报双实例）。用 `lsof -p <pid>` 看 fd/sock 归属，或 `pgrep -f 完整特征串`。
 5. **清理类操作禁止盲删「非当前/非自己的」对象**（曾按「除第一个外全关」清理 tab——若那些不是死残留而是活跃会话的 tab，就是事故重演）。先甄别归属，只删确属自己或确认已死的。
 6. 管道后 `$?` 是末命令的退出码；要真实退出码先落盘（`cmd > log` 后 `echo $?`）或用 PIPESTATUS。
