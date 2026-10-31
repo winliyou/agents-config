@@ -180,7 +180,12 @@ PYEOF
       [ -e "$ep" ] && continue
       # 裸 token 可能是「含空格路径」被截断的前缀：若存在以此开头的真实条目则不算失效
       if compgen -G "${ep}*" >/dev/null 2>&1; then continue; fi
+      # 豁免 1：同行在陈述「不存在/未配置」，属正确描述
       if grep -F -- "$p" "$f" 2>/dev/null | grep -qE '不存在|未配置|未设置|未安装|尚未|not exist'; then
+        continue
+      fi
+      # 豁免 2：远端/运行时产物——路径在服务器上、或由程序运行时生成，本机本来就没有
+      if grep -F -- "$p" "$f" 2>/dev/null | grep -qE '服务器|远端|远程|运行时|自动生成|首次运行|运行后|示例|例如|比如'; then
         continue
       fi
       emit WARN "$name" "引用的路径不存在：$p"

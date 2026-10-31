@@ -14,6 +14,8 @@ description: 下载依赖、访问被墙站点、配置镜像源与代理的规�
     - 配置文件零 registry：`~/.npmrc`、项目 `.npmrc`、`bunfig.toml`、`.yarnrc*`、环境变量、CI/Dockerfile **一律不写 registry**。本机全局配置均不存在，`npm/pnpm config get registry` 实测均为官方 `https://registry.npmjs.org/`。
     - 仅当官方源**确认不可用**时，才用命令行参数**临时**走 npmmirror，用完即弃：`npm/pnpm <cmd> --registry https://registry.npmmirror.com`、`bun install --registry https://registry.npmmirror.com`。坚决杜绝写回任何配置文件（用户红线，覆盖本 skill 旧的全局镜像策略）。
     - lockfile 会烙死下载 URL 绕过 registry 默认值：删掉 registry 配置后 lockfile 里仍可能残留 npmmirror URL。迁移方法：**域名替换** `registry.npmmirror.com` → `registry.npmjs.org`（镜像 tarball 与官方字节一致，integrity 不变、版本零漂移），再 `npm ci` / `pnpm|bun install --frozen-lockfile` 实装校验（2026-10-14 实测五个存量仓库全部通过，删除 lockfile 重装会引入依赖漂移，禁用）。
+      当前**仍有仓库未迁移**（2026-10-31 复核：本机仍有多份 lockfile 含 npmmirror），核查命令：
+      `grep -rl registry.npmmirror.com ~/work --include='bun.lock' --include='package-lock.json'`。
   - Go：**本机尚未配置**（`go env GOPROXY` 当前是官方 `https://proxy.golang.org,direct`）。需要时按需设 `GOPROXY=https://goproxy.cn,direct`，不要以为已生效。
   - Rust：**本机未配置 crates.io 镜像**（`~/.cargo/config.toml` 不存在）；但 `~/.zshrc` 已把 `RUSTUP_DIST_SERVER` / `RUSTUP_UPDATE_ROOT` 指向清华 TUNA，装 toolchain 走镜像。
   - pip：`-i https://pypi.tuna.tsinghua.edu.cn/simple`
