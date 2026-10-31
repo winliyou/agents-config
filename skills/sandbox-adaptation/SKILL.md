@@ -28,7 +28,7 @@ DSH 沙盒问题第一入口。**本机唯一首选解法：凡是「某个 home
 
 **注意**：
 
-- 只加确实需要「写」的缓存/状态目录；含明文凭据的目录（`~/.docker`、`~/.dotnet` 等）谨慎列入，`~/.gradle` 若将来放凭据需重新评估。读权限本就不受限，插件只管写。
+- 只加确实需要「写」的缓存/状态目录；含明文凭据的目录谨慎列入，例如 `~/.docker/config.json`、`~/.npmrc`、`~/.cargo/credentials.toml`、`~/.aws`（按工具实际凭据文件判断，别整目录放行），`~/.gradle` 若将来放凭据需重新评估。读权限本就不受限，插件只管写。
 - 不要用 `HOME`/`TMPDIR` 整体重定向当长期方案（会连带搬走其他工具的缓存与凭据路径）；仅当工具路径硬编码且无任何配置面时才用，且只对单条命令生效。
 - 构建/测试等长命令不要用 `| tail` 收退出码（管道吞掉真实退出码，失败会被误判为成功）：`cmd > log 2>&1; echo "[exit=$?]"; tail log`，或 `cmd | tail; echo "[exit=${PIPESTATUS[0]}]"`。
 - `~/.agent-browser` 是有意**不**放行的特例（不是单纯目录权限问题：放行会让 agent-browser 在沙盒内误启动、Chrome 因嵌套沙盒起不来），见 `browser-automation-safety` skill。

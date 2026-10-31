@@ -79,8 +79,11 @@ npx skills update <name> -g -y  # 只更新指定 skill
 它会报「all up to date」却留着本地改动。要拿回纯净上游版必须重装：
 `npx skills remove -g -s <name> -y` → `npx skills add <owner/repo> -g -y -s <name> --copy`。
 
-来源显示为 `local` 的（如来自 ClaudeKit 的那批）CLI 完全不管，只能走它自己的安装器，
-详见 `~/.agents/README.md`「第三方 skill」一节。
+来源显示为 `local` 的是**自建 skill**（本机 15 个）：没有上游、不该去更新，本来就归本仓库维护。
+第三方的那 8 个都已能被 CLI 跟踪（`vercel-labs/*` 与 `nextlevelbuilder/ui-ux-pro-max-skill`），
+`npx skills update -g -y` 直接生效。
+（2026-10-31 校正：旧文写「local 的如来自 ClaudeKit 的那批，只能走它自己的安装器」——这批实际是
+`nextlevelbuilder/ui-ux-pro-max-skill`，CLI 可更新；详见 `~/.agents/README.md`「第三方 skill」一节。）
 
 ## 冲突时怎么办（不要两份并存）
 

@@ -24,7 +24,7 @@ description: 下载依赖、访问被墙站点、配置镜像源与代理的规�
   - **Docker / OrbStack 例外**：`docker pull` 由 daemon（VM 内）发起，**不读 shell 的 http_proxy/https_proxy**，也不读 macOS 系统代理的 shell 副本；daemon 实际走 OrbStack 内置 `proxy.orb.internal:8305`，由 `orbctl config set network_proxy <url>` 控制（默认 `auto` 跟随 macOS 系统代理，本机系统代理为关）。国内直连 Docker Hub 会 502，需显式：
     `orbctl config set network_proxy http://127.0.0.1:10809`（详见 `local-environment` 的代理环境一节）。
   - **`gh` 走代理异常时先显式传大写变量（2026-10-12 实测）**：`~/.zshrc` 配的是小写
-    `http_proxy/https_proxy`；实测 `gh run list` 稳定报 `net/http: TLS handshake timeout`，而
+    `http_proxy/https_proxy`；2026-10-12 曾实测 `gh run list` 稳定报 `net/http: TLS handshake timeout`（2026-10-31 复核**已不复现**，gh 2.103.3 直连正常——遇到再按本条排障，别当必然现象），而
     `curl -x http://127.0.0.1:10809 https://api.github.com/...` 同一时刻返回 200。
     **真因未定位**（Go 标准库其实大小写都读，见 `net/http/httpproxy` 的 `getEnvAny`），
     不要据此推断机制。判据：代理探活正常（`curl -x ... https://www.google.com/generate_204` 得

@@ -32,6 +32,6 @@ description: Docker 优先原则：服务运行、集成/E2E 测试、构建与�
 
 ## 沙盒内用 docker
 
-`~/.docker/buildx` 已由 sandbox-extra-roots 放行（含 registry 凭据的 `config.json` 有意不放写），沙盒内 `docker build`/`docker compose build` 直接跑。**不要重定向 `DOCKER_CONFIG`**（会把 registry 凭据搬进 workspace）；报 `open ~/.docker/...: operation not permitted` 时，把该目录加进插件配置即可（见 `sandbox-adaptation`）。
+`~/.docker/buildx` 已由 sandbox-extra-roots 放行（2026-10-31 复核：desktop/web 两个 profile 均含该条；含 registry 凭据的 `config.json` 有意不放写），沙盒内 `docker build`/`docker compose build` 直接跑。**不要重定向 `DOCKER_CONFIG`**（会把 registry 凭据搬进 workspace）；报 `open ~/.docker/...: operation not permitted` 时，把该目录加进插件配置即可（见 `sandbox-adaptation`）。
 
 - **退出码不可靠**：buildx/构建命令失败时退出码可能仍是 0（历史上 `| tail` 把失败吞掉），必须看输出文本判成功；长命令先落盘再取退出码：`cmd > log 2>&1; echo "[exit=$?]"`。

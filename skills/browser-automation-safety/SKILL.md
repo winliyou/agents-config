@@ -10,7 +10,7 @@ description: 浏览器自动化安全约定与防弹窗红线（本机）：一�
 ## 工具选择：一律 agent-browser（硬红线）
 
 - **浏览器自动化与自动化测试必须走 `agent-browser`**，禁止自研脚本 / Playwright / 直接 spawn Chrome 或自写 CDP 脚本。三条理由：① 只有 wrapper 路径内置 `~/.agents/bin/chrome-guard`，防止 headless 实例独占 `com.google.Chrome` 的 LaunchServices 身份、导致用户点 Dock 没反应；② 历史取证中劫持用户 Chrome 的 headless 实例**全部来自项目自研脚本**；③ wrapper 启动开销已足够低（冷启动 1.9s、热路径约 250ms），"太慢所以绕开"不成立。
-- **存量例外**：两仓库 E2E 仍用 Playwright（自带 Chromium、headless、未接日常 Chrome）属历史遗留——其一（游戏项目）**迁移进行中**（2026-10-31 复核：主分支仍有 `playwright.config.ts` + 20 个 `*.spec.ts`；迁移改动在**未合并**的 worktree 分支上，尚未进主干），另一（运维门户）待迁移。判断「迁完了没」一律看主分支：`ls playwright.config.ts tests/e2e/*.spec.ts`，不要凭印象。**新项目/新套件一律直接用 agent-browser，不得新增 playwright/puppeteer 依赖**；迁移前风险可控（自带 Chromium 与日常 Chrome 的 bundle 身份无关），但**不得改用 `channel: "chrome"` 接系统 Chrome**。
+- **存量例外**：两仓库 E2E 仍用 Playwright（自带 Chromium、headless、未接日常 Chrome）属历史遗留——其一（游戏项目）**迁移进行中**（2026-10-31 复核：迁移分支 `fix/e2e-agent-browser` **已合入主干**，但迁移改动本身**尚未提交**，仍留在 `.worktrees/e2e-migration` 工作树里——46 个改动：删 `playwright.config.ts` + 20 个 `*.spec.ts`、改 `package.json`、`tests/e2e/` 已全换成 `.mjs`。判断迁移是否落地看主分支 `ls playwright.config.ts tests/e2e/*.spec.ts`，别看分支名），另一（运维门户）待迁移。判断「迁完了没」一律看主分支：`ls playwright.config.ts tests/e2e/*.spec.ts`，不要凭印象。**新项目/新套件一律直接用 agent-browser，不得新增 playwright/puppeteer 依赖**；迁移前风险可控（自带 Chromium 与日常 Chrome 的 bundle 身份无关），但**不得改用 `channel: "chrome"` 接系统 Chrome**。
 - 本节约定与本机 `~/.agent-browser/config.json` 共同生效——**不要绕过配置文件去手写 env**。
 - **自研 CDP 管线已全部废止**（不 spawn Chrome、不管 CDP 端口/daemon/profile）；唯一允许的 CDP 补充场景（移动端视口模拟）与废止清单见 `references/wrapper-internals.md`。
 
