@@ -61,13 +61,34 @@ npx skills add <owner/repo> -g -y -s <name> --copy
 后 6 个来自 ClaudeKit（`metadata.author: claudekit`），官方更新通道是它自己的 CLI：
 
 ```bash
-npm i -g claudekit-cli      # 提供 ck 命令
-ck init -g --kit engineer   # 需 GitHub PAT（repo scope），源仓库私有
+npm i -g claudekit-cli                                  # 提供 ck 命令（npm 实测 v4.5.2）
+ck skills --list                                        # 列官方 skill（需先有 ClaudeKit 安装）
+ck skills --name <skill> -a claude-code -g -y           # 装/更新单个 skill
+ck init -g --kit engineer                               # 更新整套 kit
 ```
 
-注意两点：① `ck` 默认装到 `~/.claude/skills/`，而 DSH 读 `~/.agents/skills/`，装完需自行同步；
-② 文档里写的源仓库 `bestagentkits/agentkit` 匿名访问是 404（私有），没有 token 拉不到。
-在补齐这两个前提之前，这 6 个只能当 `local` 副本用。
+**但当前账号拿不到官方源（2026-10-31 实测）**：
+
+- 官方仓库是 `claudekit/claudekit-engineer`（私有）。`ck versions` 实测报：
+  `404 ... You may not have been invited to the repository yet`。
+- gh CLI 已登录 `winliyou`（含 `repo` scope），但该仓库同样 404；无待接受邀请；
+  org 成员只有 `WuLongTou` / `ShanWuYinShe`。**这是权限问题，gh token 解决不了。**
+- `ck init --use-git` 可改用 SSH/HTTPS 凭据，但同样要求仓库权限。
+
+**公开镜像不能替代更新**（已逐个核对，都是旧快照且结构不同）：
+
+| 公开仓库 | 最后推送 | 含我们哪些 skill | 能否代替 |
+|---|---|---|---|
+| `mrgoonie/claudekit-skills`（作者是 bestagentkits 创始人） | 2026-04-03 | 仅 `ui-styling` | 否（本地 2026-09-18 装，公开版更旧） |
+| `bestagentkits/ck-skills` | 2026-05-18 | `design`、`ui-ux-pro-max` | 否（`design` 的 name 是 `ckm:design`，改名会破坏引用） |
+| `bestagentkits/agency-skills` | 2026-06-30 | `design-system` | 否（162 行 vs 本地 244 行，是另一变体） |
+
+另有两点操作前提：`ck` 默认装到 `~/.claude/skills/`，而 DSH 读 `~/.agents/skills/`，装完需同步；
+`brand` / `slides` 在以上公开仓库里都找不到。
+
+**结论**：在被邀请进 `claudekit/claudekit-engineer` 之前，这 6 个只能当 `local` 副本用。
+拿到权限后一行命令即可：`GH_TOKEN=$(gh auth token) ck skills --name <skill> -a claude-code -g -y`。
+
 
 
 ## 知识保鲜与自检
