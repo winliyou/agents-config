@@ -16,7 +16,7 @@
 3. **人工任务收尾三连检查**（写进每轮工作流程）：
    ```bash
    agent-browser session list                  # 只应剩当前任务会话
-   ps aux | grep -c 'Chrome for Testing'       # 期望 0（无任务）或仅活跃任务数
+   ps aux | grep '[r]emote-debugging-port=0' | grep -vc -- '--type='   # 主进程数，期望 0 或仅活跃任务数
    agent-browser tab list                       # 当前会话只留 1 个标签
    ```
 4. **禁止 `close --all`**（wrapper 硬拦）；也**不得关别人的会话**，先确认该会话无 active socket/无任务（`lsof ~/.agent-browser/<名>.sock`）。
@@ -81,7 +81,10 @@ node ~/.agents/bin/ab-reap-orphans.mjs --min-age 0  # 立即收割当前确认�
 1. **独立实例用完即关**：`agent-browser --session <名> close`（只关自己的；`close --all` 仍是红线）。
    宿主被 SIGKILL 时 trap 不会执行——那由 reaper 兜底，但正常路径必须自己 close。
 2. **任务收尾复查两件事**：`agent-browser session list`（有没有不该存在的会话）、
-   `ps aux | grep -c 'remote-debugging-port=0'`（headless Chrome 主进程数是否超出预期）。
+   `ps aux | grep '[r]emote-debugging-port=0' | grep -vc -- '--type='`（headless 主进程数是否超出预期）。
+   **口径坑（2026-10-31 实测）**：直接 `grep -c 'remote-debugging-port=0'` 会把每个渲染/GPU/utility 子进程都算进去——
+   当时实测 22 条 vs 真实主进程 2 条，**虚高约 10 倍**；用 `grep 'Chrome for Testing'` 又只匹配 Testing 构建，
+   本机默认用 Google Chrome（Stable）时完全数不到。必须用上面「排除 `--type=`」的口径。
    发现异常残留：先核实无活任务，再 `node ~/.agents/bin/ab-reap-orphans.mjs --min-age 0` 立即收割。
 3. **产物不落公共目录**：截图/HAR/下载等属项目中间产物，落项目 `.workwork/`；
    确因工具默认路径落到 `~/.agent-browser/tmp/` 的，reaper 按 7 天 TTL（`AB_TMP_TTL_DAYS`）自动清理，

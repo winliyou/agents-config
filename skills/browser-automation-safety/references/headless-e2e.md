@@ -13,7 +13,18 @@
 ```
 --disable-background-timer-throttling,--disable-renderer-backgrounding,--disable-backgrounding-occluded-windows
 ```
-实测恢复 `visibilityState === "visible"` + rAF 61 帧/秒(与应用 60 上限一致)。注意:
+实测恢复 `visibilityState === "visible"` + rAF 61 帧/秒(与应用 60 上限一致)。
+
+**⚠️ 自设 `AGENT_BROWSER_ARGS` 会挤掉 wrapper 的反检测注入（2026-10-31 复核 wrapper 源码）**：
+wrapper 的逻辑是 `if (!process.env.AGENT_BROWSER_ARGS) 注入 --disable-blink-features=AutomationControlled`。
+你自己设了这个变量，wrapper 就**不再补**那一条 → `navigator.webdriver` 变回 `true`。
+所以注入上面三件套时**必须把 `--disable-blink-features=AutomationControlled` 一起带上**：
+```
+AGENT_BROWSER_ARGS=--disable-background-timer-throttling,--disable-renderer-backgrounding,--disable-backgrounding-occluded-windows,--disable-blink-features=AutomationControlled
+```
+（`AGENT_BROWSER_USER_AGENT` 是另一条独立判断，不受影响，UA 仍会被 wrapper 注入成正常 Chrome。）
+
+注意:
 - flag 只在 Chrome 冷启动时生效,已运行的会话需 close 后重开才生效;
 - 三个 flag 的值均无逗号,可经 ARGS 逗号拆分安全传递;若需 `--disable-features=A,B` 这类含逗号值,
   只能单独传一个 flag(ARGS 会按逗号硬拆)。

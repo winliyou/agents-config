@@ -85,6 +85,12 @@
 
 ### 模型 + 思考等级切换（选择器一览）
 
+> ⚠️ **本节选择器与模型名是 2026-10-14/15 的网页快照，Gemini 前端迭代很快，用前必须现验**
+> （2026-10-31 复核：本节未重新访问 Gemini 验证，无法确认 `.picker-primary-text` / 「4 Argon」/
+> 思考等级三档文案是否仍成立）。现验方式：先跑一次只读 eval 打印
+> `document.querySelector('.picker-primary-text')?.closest('button')?.getAttribute('aria-label')`，
+> 与下表预期格式对不上就以实际值更新本节，不要照旧表硬套。
+
 | 目标 | 选择器 / 判定 |
 |---|---|
 | 当前模型按钮 | `.picker-primary-text`（取 `[0]`）→ `closest('button')`，取值看其 `aria-label`「打开模式选择器，当前模式为"X"」 |
