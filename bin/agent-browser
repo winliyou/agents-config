@@ -80,7 +80,7 @@ for (const a of argv) {
 }
 
 // ---------- 子命令 / --all / 生效 session 名解析 ----------
-const VALUE_FLAGS = new Set(["--session", "--profile", "--cdp", "--label", "--args", "--timeout", "--default-timeout", "--idle-timeout"]);
+const VALUE_FLAGS = new Set(["--session", "--profile", "--cdp", "--label", "--args", "--timeout", "--default-timeout", "--idle-timeout", "--init-script"]);
 let subcmd = "";
 let hasCloseAll = false;
 for (let i = 0; i < argv.length; i++) {
@@ -174,8 +174,25 @@ const purgeDeadSessionState = () => {
       // 这具陈旧 sock 永久短路(26 组死会话残留的真因)。判活以 .pid 为准:
       //   .pid 存在且进程死  → sock 一定是陈旧的,连同状态文件一起删;
       //   .pid 缺失(无法判死) → 保守起见维持旧行为,只删非 sock 状态文件。
-      const sockStale = Boolean(pid);
-      if (sockStale) rmFile(AB_HOME + "/" + n + ".sock");
+      // 2026-10-28 修复跨代竞态:同名会话重建时 .pid 仍指向上一代(已死),磁盘 sock 却
+      // 已被新一代 daemon 重新 bind(.pid 写回晚于 bind),旧逻辑会删掉活 daemon 的 sock
+      // 使其永久失联(实测 cnm-e2e 由此泄漏 3 套 daemon+Chrome)。删 sock 前核实磁盘路径
+      // 的真实持有者:有存活的 agent-browser 进程持有 → 是活 daemon,整组跳过。
+      const sockPath = AB_HOME + "/" + n + ".sock";
+      let sockStale = Boolean(pid);
+      if (sockStale && sockExists(sockPath)) {
+        const holders = run(["lsof", "-t", sockPath]).stdout.toString().split("\n").map((s) => s.trim()).filter(Boolean);
+        const liveDaemon = holders.find((h) => /agent-browser/.test(run(["ps", "-o", "command=", "-p", h]).stdout.toString()));
+        if (liveDaemon) {
+          // 不止跳过,还要治愈:上游真身的 session list 等命令按「.pid 已死」prune 整个会话
+          // (连活 sock 一起删 —— 2026-10-28 对照实验证实:死 .pid 组 6 文件全清、活 daemon 断联),
+          // 故必须把真实持有者写回 .pid,消除上游可见的不一致。
+          try { fs.writeFileSync(AB_HOME + "/" + n + ".pid", String(liveDaemon) + "\n"); } catch {}
+          debug(".pid 落后于新一代,已治愈为实际持有者 " + liveDaemon + ":" + n);
+          continue;
+        }
+      }
+      if (sockStale) rmFile(sockPath);
       if (!sockExists(AB_HOME + "/" + n + ".sock")) {
         for (const ext of ["target", "config", "pid", "stream", "version", "engine"]) rmFile(AB_HOME + "/" + n + "." + ext);
         debug("清理已死会话的残留状态:" + n + (sockStale ? "(含陈旧 sock)" : ""));
@@ -481,7 +498,7 @@ if (!guest && effectiveName === "shared" && !argv.some((a) => a === "--pin-tab" 
   inject.push("--pin-tab");
 }
 
-// ---------- 3.5) 空闲回收:仅非房客禁用(房客 daemon 1h 自退,下次按 targetId 重挂) ----------
+// ---------- 3.5) 空闲回收:仅非房客禁用(房客 attach 豁免空闲回收,实测永不自退 —— 2026-10-16 修正,旧文"1h 自退"作废) ----------
 if (!guest) {
   const hasIdle = argv.some((a) => a === "--idle-timeout" || a.startsWith("--idle-timeout="));
   if (!hasIdle && !process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS) injectEnv.AGENT_BROWSER_IDLE_TIMEOUT_MS = "0";

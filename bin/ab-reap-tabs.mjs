@@ -23,7 +23,18 @@ const DRY = process.argv.includes("--dry-run");
 const AB = process.env.AGENT_BROWSER_HOME ?? join(homedir(), ".agent-browser");
 const DEADLINE = Date.now() + 10_000; // 整体硬超时:清理绝不能拖垮任何调用方
 
-const get = (cmd) => { try { return spawnSync("agent-browser", cmd, { encoding: "utf8", timeout: 8000 }).stdout.trim(); } catch { return ""; } };
+// 二进制解析:PATH 里有 agent-browser 就用;否则回退 wrapper 绝对路径(2026-10-27 补:
+// DSH 派发环境 PATH 可能缺 ~/.local/bin,裸命令名会 ENOENT → 静默 no-op,清理永远不生效)。
+const AB_BIN_CANDS = [process.env.AB_BIN ?? "", join(homedir(), ".local/bin/agent-browser")].filter(Boolean);
+const get = (cmd) => {
+  for (const bin of AB_BIN_CANDS) {
+    try {
+      const r = spawnSync(bin, cmd, { encoding: "utf8", timeout: 8000 });
+      if (!r.error) return (r.stdout ?? "").trim();
+    } catch {}
+  }
+  return "";
+};
 const url = get(["get", "cdp-url"]);
 if (!url.startsWith("ws")) process.exit(0); // 拿不到 CDP(浏览器没起等)→ 静默放弃
 
