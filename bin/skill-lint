@@ -110,14 +110,34 @@ for root in "${ROOTS[@]}"; do
       printf '%s\n' "$fm" | grep -q '^description:' || emit ERROR "$name" "frontmatter 缺 description"
     fi
 
-    # ---- 1b. frontmatter 里的未加引号标量含 ": " → YAML 解析失败，skill 被 DSH 静默忽略
-    #      （2026-10-31 真实踩坑：description 写了 "websites: navigating"，整条 skill 从目录里消失）
+    # ---- 1b. frontmatter 里未加引号的标量含 ": " → YAML 解析失败，skill 被 DSH 静默忽略
+    #      （2026-10-31 真实踩坑：description 写了 "websites: navigating"，该 skill 直接从目录消失）
     while IFS= read -r bad; do
       [ -z "$bad" ] && continue
-      emit ERROR "$name" "frontmatter 的 $bad 值含未加引号的 ': '，YAML 解析会失败导致 skill 被静默忽略"
-    done < <(awk 'NR==1{next} /^---$/{exit} /^(name|description|whenToUse):/ && /: /' "$f" 2>/dev/null | sed -E 's/^(name|description|whenToUse):.*/\1/' | while read -r k; do
-        awk -v k="$k" 'NR==1{next} /^---$/{exit} index($0,k":")==1 {v=substr($0,length(k)+2); if (v ~ /^[ "]|[']/) next; if (v ~ /: /) print k}' "$f"
-      done | sort -u)
+      emit ERROR "$name" "frontmatter 的 $bad 值含未加引号的 ': '，YAML 解析会失败导致 skill 被静默忽略（加引号即可）"
+    done < <(python3 - "$f" << 'PYEOF'
+import sys, re
+path = sys.argv[1]
+try:
+    text = open(path, encoding="utf-8").read()
+except Exception:
+    raise SystemExit
+m = re.match(r"^---\r?\n(.*?)\r?\n---", text, re.S)
+if not m:
+    raise SystemExit
+for line in m.group(1).split("\n"):
+    hit = re.match(r"^(name|description|whenToUse):\s*(.*)$", line)
+    if not hit:
+        continue
+    val = hit.group(2).strip()
+    if not val:
+        continue
+    if val[0] in ("\"", chr(39)):
+        continue
+    if ": " in val or val.endswith(":"):
+        print(hit.group(1))
+PYEOF
+    )
 
     # ---- 2. description 长度（按字符计；超 500 会被 DSH 截断成 "..."，尾部触发词丢失）
     dlen=$(python3 - "$f" <<'PYEOF'
