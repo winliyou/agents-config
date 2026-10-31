@@ -110,6 +110,15 @@ for root in "${ROOTS[@]}"; do
       printf '%s\n' "$fm" | grep -q '^description:' || emit ERROR "$name" "frontmatter 缺 description"
     fi
 
+    # ---- 1b. frontmatter 里的未加引号标量含 ": " → YAML 解析失败，skill 被 DSH 静默忽略
+    #      （2026-10-31 真实踩坑：description 写了 "websites: navigating"，整条 skill 从目录里消失）
+    while IFS= read -r bad; do
+      [ -z "$bad" ] && continue
+      emit ERROR "$name" "frontmatter 的 $bad 值含未加引号的 ': '，YAML 解析会失败导致 skill 被静默忽略"
+    done < <(awk 'NR==1{next} /^---$/{exit} /^(name|description|whenToUse):/ && /: /' "$f" 2>/dev/null | sed -E 's/^(name|description|whenToUse):.*/\1/' | while read -r k; do
+        awk -v k="$k" 'NR==1{next} /^---$/{exit} index($0,k":")==1 {v=substr($0,length(k)+2); if (v ~ /^[ "]|[']/) next; if (v ~ /: /) print k}' "$f"
+      done | sort -u)
+
     # ---- 2. description 长度（按字符计；超 500 会被 DSH 截断成 "..."，尾部触发词丢失）
     dlen=$(python3 - "$f" <<'PYEOF'
 import sys, re
