@@ -69,7 +69,10 @@ Model: <模型名>
    不触发。官方文档（Events that trigger workflows，`push` 一节）原文：
    「Events will not be created for tags when more than three tags are pushed at
    once.」上限是**推送批次**的粒度——推 4 个是**全部**不触发，不是「前 3 个能过」。
-   `delete` 事件同样限 3 个一批，所以**删 tag 也要一个一个删**。
+   `delete` 事件同样限 3 个一批（同页 `delete` 一节原文：「An event will not be created
+   when you delete more than three tags at once.」，2026-10-31 复核），所以**删 tag 也要一个一个删**。
+   > 注意两节措辞不完全一样：`create` 节写的是「create more than three tags at once」，
+   > `push`/`delete` 才是限制实际生效的位置——判断以 push/delete 为准。
 2. **逐个推还不够：连推不等会取消流水。** 若 workflow 用了仓库级并发组
    （`concurrency: group: <x>`），GitHub 同一时刻只允许 **1 个 running + 1 个
    pending**，且默认 `queue: single`——**新排队的 run 会取消当前 pending 的 run**。

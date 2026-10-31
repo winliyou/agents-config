@@ -9,7 +9,7 @@ description: 下载依赖、访问被墙站点、配置镜像源与代理的规�
 
 访问可能被墙的网站（网页、文档、API、CDN 等）时直接走本地 xray 代理；开发类依赖下载/代码拉取的优先级：国内镜像源 → 本地 xray 代理 → 停止并说明（**npm/pnpm/bun 例外：默认官方源，见下条**）。以下镜像与代理均于 2026-09 实测可用，若失效先重新探活再换方案。
 
-- 优先镜像源：有国内镜像的工具直接在项目/工具配置中固定镜像，不走代理：
+- 优先镜像源：**除 npm/pnpm/bun 外**，有国内镜像的工具直接在项目/工具配置中固定镜像，不走代理（npm 系是例外，见下条）：
   - npm/pnpm/bun：**默认一律 npmjs 官方源，禁止把镜像写进配置文件**（2026-10-14 用户定策，全机五仓库落地并实测）：
     - 配置文件零 registry：`~/.npmrc`、项目 `.npmrc`、`bunfig.toml`、`.yarnrc*`、环境变量、CI/Dockerfile **一律不写 registry**。本机全局配置均不存在，`npm/pnpm config get registry` 实测均为官方 `https://registry.npmjs.org/`。
     - 仅当官方源**确认不可用**时，才用命令行参数**临时**走 npmmirror，用完即弃：`npm/pnpm <cmd> --registry https://registry.npmmirror.com`、`bun install --registry https://registry.npmmirror.com`。坚决杜绝写回任何配置文件（用户红线，覆盖本 skill 旧的全局镜像策略）。
