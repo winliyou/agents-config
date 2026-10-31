@@ -42,7 +42,7 @@ npx skills update -g -y         # 更新全部全局 skill
 npx skills update <name> -g -y  # 只更新指定 skill
 ```
 
-**坑：`update` 只比对远端版本，检测不到本地漂移。** 若模板文件被手工改过而远端没发新版，
+**坑 1：`update` 只比对远端版本，检测不到本地漂移。** 若文件被手工改过而远端没发新版，
 `update` 会报「all up to date」却留着本地改动。要拿回纯净上游版必须重装：
 
 ```bash
@@ -50,46 +50,32 @@ npx skills remove -g -s <name> -y
 npx skills add <owner/repo> -g -y -s <name> --copy
 ```
 
-### 两类的更新能力不同
+**坑 2：`-s` 不支持逗号分隔**，要写多个 `-s`：`-s brand -s design -s slides`。
+写成一个 `-s "brand,design"` 会报 `No matching skills found`。
 
-| skill | Source | 能否 `npx skills update` |
-|---|---|---|
-| `agent-browser` | `vercel-labs/agent-browser` | 能 |
-| `find-skills` | `vercel-labs/skills` | 能 |
-| `brand` / `design` / `design-system` / `slides` / `ui-styling` / `ui-ux-pro-max` | `local` | **不能**，官方 CLI 不知道来源 |
+**坑 3：从本地路径安装会把 lock 记成本地路径**（`source: /tmp/xxx`），之后 `update` 失效。
+必须用 `owner/repo` 形式安装，`npx skills list -g` 确认 Source 是仓库名而不是路径。
 
-后 6 个来自 ClaudeKit（`metadata.author: claudekit`），官方更新通道是它自己的 CLI：
+### 当前 8 个第三方 skill 的来源（全部可 `npx skills update`）
+
+| skill | Source |
+|---|---|
+| `agent-browser` | `vercel-labs/agent-browser` |
+| `find-skills` | `vercel-labs/skills` |
+| `brand` / `design` / `design-system` / `slides` / `ui-styling` / `ui-ux-pro-max` | `nextlevelbuilder/ui-ux-pro-max-skill` |
+
+后 6 个常被误认成 ClaudeKit 付费套件（frontmatter 里有 `metadata.author: claudekit`），
+**实际来源是公开仓库 `nextlevelbuilder/ui-ux-pro-max-skill`**（14 万+ star，仍在高频更新）。
+2026-10-31 已按此来源统一更新并纳入 CLI 跟踪：
 
 ```bash
-npm i -g claudekit-cli                                  # 提供 ck 命令（npm 实测 v4.5.2）
-ck skills --list                                        # 列官方 skill（需先有 ClaudeKit 安装）
-ck skills --name <skill> -a claude-code -g -y           # 装/更新单个 skill
-ck init -g --kit engineer                               # 更新整套 kit
+npx skills add nextlevelbuilder/ui-ux-pro-max-skill -g -y \
+  -s brand -s design -s design-system -s slides -s ui-styling -s ui-ux-pro-max --copy
 ```
 
-**但当前账号拿不到官方源（2026-10-31 实测）**：
-
-- 官方仓库是 `claudekit/claudekit-engineer`（私有）。`ck versions` 实测报：
-  `404 ... You may not have been invited to the repository yet`。
-- gh CLI 已登录 `winliyou`（含 `repo` scope），但该仓库同样 404；无待接受邀请；
-  org 成员只有 `WuLongTou` / `ShanWuYinShe`。**这是权限问题，gh token 解决不了。**
-- `ck init --use-git` 可改用 SSH/HTTPS 凭据，但同样要求仓库权限。
-
-**公开镜像不能替代更新**（已逐个核对，都是旧快照且结构不同）：
-
-| 公开仓库 | 最后推送 | 含我们哪些 skill | 能否代替 |
-|---|---|---|---|
-| `mrgoonie/claudekit-skills`（作者是 bestagentkits 创始人） | 2026-04-03 | 仅 `ui-styling` | 否（本地 2026-09-18 装，公开版更旧） |
-| `bestagentkits/ck-skills` | 2026-05-18 | `design`、`ui-ux-pro-max` | 否（`design` 的 name 是 `ckm:design`，改名会破坏引用） |
-| `bestagentkits/agency-skills` | 2026-06-30 | `design-system` | 否（162 行 vs 本地 244 行，是另一变体） |
-
-另有两点操作前提：`ck` 默认装到 `~/.claude/skills/`，而 DSH 读 `~/.agents/skills/`，装完需同步；
-`brand` / `slides` 在以上公开仓库里都找不到。
-
-**结论**：在被邀请进 `claudekit/claudekit-engineer` 之前，这 6 个只能当 `local` 副本用。
-拿到权限后一行命令即可：`GH_TOKEN=$(gh auth token) ck skills --name <skill> -a claude-code -g -y`。
-
-
+> 教训：光看 frontmatter 的 `metadata.author` 会误判来源。判定来源以 `npx skills list -g` 的
+> Source 列为准；查不到时用特征文件名去 GitHub 代码搜索反查（本次靠 `claudekit-pitch-251223`
+> 和 `inject-brand-context` 两个特征串定位到真实仓库）。
 
 ## 知识保鲜与自检
 
