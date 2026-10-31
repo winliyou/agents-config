@@ -67,6 +67,21 @@ description: 经验沉淀与知识库保鲜规程：什么该沉淀、沉淀到�
   2026-10-31 才迁移走并还原文件——这类内容一律写进自建 skill。
 - 第三方 skill 缺能力时，**写一个自建的补充 skill 指向它**，而不是改它。
 
+### 更新走官方 CLI，不要手工编辑
+
+```bash
+npx skills list -g              # 看 Source：非 local 才有上游可更新
+npx skills update -g -y         # 更新全部全局 skill
+npx skills update <name> -g -y  # 只更新指定 skill
+```
+
+**`update` 只比对远端版本，检测不到本地漂移**（2026-10-31 实测）：文件被手工改过、但远端没发新版时，
+它会报「all up to date」却留着本地改动。要拿回纯净上游版必须重装：
+`npx skills remove -g -s <name> -y` → `npx skills add <owner/repo> -g -y -s <name> --copy`。
+
+来源显示为 `local` 的（如来自 ClaudeKit 的那批）CLI 完全不管，只能走它自己的安装器，
+详见 `~/.agents/README.md`「第三方 skill」一节。
+
 ## 冲突时怎么办（不要两份并存）
 
 发现旧结论与新结论矛盾时：

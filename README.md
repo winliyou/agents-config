@@ -32,6 +32,44 @@ ln -s ~/.agents/bin/agent-browser ~/.local/bin/agent-browser
 （上游更新会静默冲掉），需要补充就写自建 skill。`skill-lint` 默认跳过，输出 `SKIP` 属预期，
 加 `--with-third-party` 才检查。
 
+### 更新（官方 CLI，2026-10-31 实测）
+
+统一用 skills CLI，不要手工改文件：
+
+```bash
+npx skills list -g              # 看每个 skill 的 Source：非 local 才可更新
+npx skills update -g -y         # 更新全部全局 skill
+npx skills update <name> -g -y  # 只更新指定 skill
+```
+
+**坑：`update` 只比对远端版本，检测不到本地漂移。** 若模板文件被手工改过而远端没发新版，
+`update` 会报「all up to date」却留着本地改动。要拿回纯净上游版必须重装：
+
+```bash
+npx skills remove -g -s <name> -y
+npx skills add <owner/repo> -g -y -s <name> --copy
+```
+
+### 两类的更新能力不同
+
+| skill | Source | 能否 `npx skills update` |
+|---|---|---|
+| `agent-browser` | `vercel-labs/agent-browser` | 能 |
+| `find-skills` | `vercel-labs/skills` | 能 |
+| `brand` / `design` / `design-system` / `slides` / `ui-styling` / `ui-ux-pro-max` | `local` | **不能**，官方 CLI 不知道来源 |
+
+后 6 个来自 ClaudeKit（`metadata.author: claudekit`），官方更新通道是它自己的 CLI：
+
+```bash
+npm i -g claudekit-cli      # 提供 ck 命令
+ck init -g --kit engineer   # 需 GitHub PAT（repo scope），源仓库私有
+```
+
+注意两点：① `ck` 默认装到 `~/.claude/skills/`，而 DSH 读 `~/.agents/skills/`，装完需自行同步；
+② 文档里写的源仓库 `bestagentkits/agentkit` 匿名访问是 404（私有），没有 token 拉不到。
+在补齐这两个前提之前，这 6 个只能当 `local` 副本用。
+
+
 ## 知识保鲜与自检
 
 沉淀会腐烂：旧结论随工具升级、项目迭代变成错误，继续沿用会主动误导后续 AI。
