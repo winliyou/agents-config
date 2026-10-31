@@ -1,0 +1,19 @@
+# 第三方 skill 清单（不纳入本地维护范围）
+#
+# 判定标准：来源为外部仓库或上游发布包，本地改了也会被覆盖，因此：
+#   - skill-lint 跳过它们（不报 ERROR/WARN，只输出 SKIP）
+#   - 不要求它们带实测日期、不要求正文可复核
+#   - 本地补充一律写进自建 skill，不要追加到这些文件里
+#
+# 自动识别的两个来源（本文件是补充，不是替代）：
+#   1. .skill-lock.json 里锁定的 skill
+#   2. frontmatter 带 metadata.author / license / argument-hint 的上游格式 skill
+
+agent-browser
+find-skills
+brand
+design
+design-system
+slides
+ui-styling
+ui-ux-pro-max

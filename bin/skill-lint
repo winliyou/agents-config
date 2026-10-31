@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# skill-lint — 检测 AGENTS.md / skill 知识库中的「已失效」事实
+#
+# 用途：经验沉淀会随项目迭代腐烂。本脚本把「能机器判定」的腐烂类型一次性扫出来，
+#       避免 AI 沿用过期事实误导后续工作。
+#
+# 用法：
+#   skill-lint                    # 扫用户级 ~/.agents/skills
+#   skill-lint ~/work/foo/.agents/skills
+#   skill-lint --all              # 扫用户级 + ~/work 下全部项目级
+#   skill-lint --json             # 机器可读输出
+#   skill-lint --with-third-party # 连第三方 skill 一起查（默认跳过）
+#
+# 第三方 skill 默认跳过：它们由上游维护、本地改了会被覆盖，不纳入本地维护范围。
+# 判定来源：~/.agents/.third-party-skills 清单 + .skill-lock.json + 上游 frontmatter 特征。
+#
+# 退出码：0 = 无 ERROR（可能有 WARN）；1 = 有 ERROR。
+set -uo pipefail
+
+MAX_DESC=500          # DSH 目录渲染上限（按「字符」计，非字节）
+JSON=0
+ALL=0
+WITH_THIRD=0
+ROOTS=()
+
+for arg in "$@"; do
+  case "$arg" in
+    --json) JSON=1 ;;
+    --all)  ALL=1 ;;
+    --with-third-party) WITH_THIRD=1 ;;
+    -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) ROOTS+=("$arg") ;;
+  esac
+done
+
+# ---- 载入第三方 skill 名单（bash 3.2 兼容：用换行分隔字符串，不用关联数组）----
+THIRD_LIST=""
+_tp_file="$HOME/.agents/.third-party-skills"
+if [ -f "$_tp_file" ]; then
+  THIRD_LIST="$(grep -vE '^[[:space:]]*(#|$)' "$_tp_file" | sed -e 's/[[:space:]]//g' -e '/^$/d')"
+fi
+_lock="$HOME/.agents/.skill-lock.json"
+if [ -f "$_lock" ]; then
+  _locked="$(sed -n 's/^    "\([a-z0-9-]*\)": {$/\1/p' "$_lock")"
+  THIRD_LIST="$(printf '%s\n%s\n' "$THIRD_LIST" "$_locked" | sed '/^$/d')"
+fi
+
+# 上游 frontmatter 特征：metadata.author / license: / argument-hint:
+is_third_party() {
+  local dir="$1" name
+  name="$(basename "$dir")"
+  printf '%s\n' "$THIRD_LIST" | grep -qx -- "$name" && return 0
+  local f="$dir/SKILL.md"
+  [ -f "$f" ] || return 1
+  awk 'NR==1{next} /^---$/{exit} {print}' "$f" \
+    | grep -qE '^  author:|^license:|^argument-hint:' && return 0
+  return 1
+}
+
+if [ "$ALL" -eq 1 ]; then
+  ROOTS+=("$HOME/.agents/skills")
+  while IFS= read -r d; do ROOTS+=("$d"); done < <(find "$HOME/work" -maxdepth 5 -type d -path "*/.agents/skills" \
+      -not -path "*/node_modules/*" -not -path "*/.worktrees/*" -not -path "*/.workwork/*" 2>/dev/null | sort -u)
+fi
+[ ${#ROOTS[@]} -eq 0 ] && ROOTS=("$HOME/.agents/skills")
+
+errors=0
+warns=0
+skipped=0
+emit() {
+  if [ "$JSON" -eq 1 ]; then
+    printf '{"level":"%s","skill":"%s","message":"%s"}\n' "$1" "$2" "$3"
+  else
+    printf '%-5s %-30s %s\n' "$1" "$2" "$3"
+  fi
+  if [ "$1" = "ERROR" ]; then errors=$((errors+1)); else warns=$((warns+1)); fi
+}
+
+declare -a ALL_NAMES=()
+for root in "${ROOTS[@]}"; do
+  [ -d "$root" ] || continue
+  while IFS= read -r d; do ALL_NAMES+=("$(basename "$d")"); done < <(find "$root" -maxdepth 1 -mindepth 1 -type d 2>/dev/null)
+done
+
+for root in "${ROOTS[@]}"; do
+  [ -d "$root" ] || { emit WARN "(root)" "目录不存在，跳过：$root"; continue; }
+  for dir in "$root"/*/; do
+    [ -d "$dir" ] || continue
+    f="$dir/SKILL.md"
+    name="$(basename "$dir")"
+    [ -f "$f" ] || { emit ERROR "$name" "缺少 SKILL.md"; continue; }
+
+    # ---- 0. 第三方 skill 默认跳过（上游维护，本地改了会被覆盖；不纳入本地维护范围）
+    if [ "$WITH_THIRD" -eq 0 ] && is_third_party "$dir"; then
+      if [ "$JSON" -eq 1 ]; then
+        printf '{"level":"SKIP","skill":"%s","message":"第三方 skill，未纳入本地维护"}\n' "$name"
+      else
+        printf '%-5s %-30s %s\n' SKIP "$name" "第三方 skill，未纳入本地维护"
+      fi
+      skipped=$((skipped+1))
+      continue
+    fi
+
+    # ---- 1. frontmatter 完整性（缺 name/description 会被 DSH 静默忽略 = skill 消失）
+    if ! head -1 "$f" | grep -qx -- '---'; then
+      emit ERROR "$name" "首行不是 ---，无 frontmatter（DSH 会静默忽略该 skill）"
+    else
+      fm=$(awk 'NR==1{next} /^---$/{exit} {print}' "$f")
+      printf '%s\n' "$fm" | grep -q '^name:'        || emit ERROR "$name" "frontmatter 缺 name"
+      printf '%s\n' "$fm" | grep -q '^description:' || emit ERROR "$name" "frontmatter 缺 description"
+    fi
+
+    # ---- 2. description 长度（按字符计；超 500 会被 DSH 截断成 "..."，尾部触发词丢失）
+    dlen=$(python3 - "$f" <<'PYEOF'
+import sys, re
+path = sys.argv[1]
+try:
+    text = open(path, encoding="utf-8").read()
+except Exception:
+    print(0); raise SystemExit
+m = re.match(r"^---\r?\n(.*?)\r?\n---", text, re.S)
+if not m:
+    print(0); raise SystemExit
+lines = m.group(1).split("\n")
+idx = next((i for i, l in enumerate(lines) if l.startswith("description:")), None)
+if idx is None:
+    print(0); raise SystemExit
+val = lines[idx][len("description:"):].strip()
+for nxt in lines[idx+1:]:
+    if nxt[:1].isspace() and nxt.strip():
+        val += " " + nxt.strip()
+    else:
+        break
+val = val.strip().strip('"').strip("'")
+print(len(re.sub(r"\s+", " ", val).strip()))
+PYEOF
+)
+    if [ "${dlen:-0}" -gt "$MAX_DESC" ]; then
+      emit ERROR "$name" "description ${dlen} 字符 > ${MAX_DESC}，目录里会被截断，尾部触发词丢失"
+    fi
+
+    # ---- 3. 正文里出现的本机绝对路径是否真实存在（含反引号与裸文本两种写法）
+    #      例外：同行在陈述「不存在/未配置/未设置」，属正确描述，不算失效。
+    while IFS= read -r p; do
+      [ -z "$p" ] && continue
+      # 跳过模板占位符与「路径:行号」写法
+      case "$p" in *'<'*|*'>'*|*'*'*|*'{'*|*'}'*) continue ;; esac
+      if printf '%s' "$p" | grep -qE ':[0-9]+(-[0-9]+)?$'; then continue; fi
+      ep="${p/#\~/$HOME}"
+      ep="${ep/#\$HOME/$HOME}"
+      [ -e "$ep" ] && continue
+      # 裸 token 可能是「含空格路径」被截断的前缀：若存在以此开头的真实条目则不算失效
+      if compgen -G "${ep}*" >/dev/null 2>&1; then continue; fi
+      if grep -F -- "$p" "$f" 2>/dev/null | grep -qE '不存在|未配置|未设置|未安装|尚未|not exist'; then
+        continue
+      fi
+      emit WARN "$name" "引用的路径不存在：$p"
+    done < <(
+      {
+        # ① 反引号包裹的整段路径（允许含空格，如 "~/Library/Application Support/go"）
+        grep -ohE '\`(~|\$HOME)/[^\`]+\`' "$f" 2>/dev/null | tr -d '\`' | sed -E 's/ +--?[A-Za-z].*$//' | sed 's/[.,):;、）]*$//'
+        # ② 裸文本路径（遇到空格即止，避免把 "~/Library/Application Support" 截成 "~/Library/Application"）
+        grep -ohE '(~|\$HOME)/[A-Za-z0-9_./-]+' "$f" 2>/dev/null | sed 's/[.,):;、）]*$//'
+      } | sort -u
+    )
+
+    # ---- 3b. 相对路径式调用 .agents/skills/...（按 cwd 解析，通常在本项目根之外跑不通）
+    if grep -qE '(^|[^/\w])\.agents/skills/' "$f" 2>/dev/null; then
+      emit WARN "$name" "使用了相对路径 .agents/skills/...（依赖 cwd，跨项目调用会失败；建议改绝对路径）"
+    fi
+
+    # ---- 4. 交叉引用的 skill 名是否存在
+    while IFS= read -r ref; do
+      [ -z "$ref" ] && continue
+      [ "$ref" = "$name" ] && continue
+      found=0
+      for n in "${ALL_NAMES[@]}"; do if [ "$n" = "$ref" ]; then found=1; break; fi; done
+      [ "$found" -eq 0 ] && emit WARN "$name" "引用了不存在的 skill：$ref"
+    done < <(grep -ohE '(skill|skills) \`[a-z][a-z0-9-]+\`' "$f" 2>/dev/null | sed -E 's/.*\`([a-z0-9-]+)\`/\1/' | sort -u)
+
+    # ---- 5. 无任何日期标注（无法判断新旧，复核时无从下手）
+    if ! grep -qE '20[0-9]{2}-[0-9]{2}-[0-9]{2}' "$f"; then
+      emit WARN "$name" "全文无实测日期，无法判断时效"
+    fi
+  done
+done
+
+# ---- 6. 孤儿 skill：项目级 skill 未被项目 AGENTS.md 索引（AI 很难发现它）
+#      用户级 skill 由 DSH 自动发现挂载，不需要索引，故跳过。
+for root in "${ROOTS[@]}"; do
+  [ -d "$root" ] || continue
+  case "$root" in
+    "$HOME/.agents/skills"|"$HOME/.dsh/skills") continue ;;
+  esac
+  proj="$(dirname "$(dirname "$root")")"
+  ag="$proj/AGENTS.md"
+  if [ ! -f "$ag" ]; then emit WARN "(index)" "无项目 AGENTS.md，skill 无索引入口：$root"; continue; fi
+  for dir in "$root"/*/; do
+    [ -d "$dir" ] || continue
+    n="$(basename "$dir")"
+    # 索引口径：项目根下任意 Markdown（AGENTS.md / RELEASING.md / README.md …）提到即算有入口
+    # 索引口径：项目根顶层 Markdown + 任意层 AGENTS.md（覆盖 RELEASING.md / README.md / 子目录 AGENTS.md）
+    if grep -qF -- "$n" "$proj"/*.md 2>/dev/null        || find "$proj" -maxdepth 4 -name 'AGENTS.md' -not -path '*/node_modules/*'             -not -path '*/.git/*' -not -path '*/.worktrees/*' -not -path '*/.workwork/*'             -exec grep -qF -- "$n" {} + 2>/dev/null; then
+      continue
+    fi
+    emit WARN "$n" "孤儿 skill：项目内任何 Markdown 都未提及（AI 很难发现它）"
+  done
+done
+
+if [ "$JSON" -eq 0 ]; then
+  printf '\n合计：ERROR=%d  WARN=%d  SKIP(第三方)=%d\n' "$errors" "$warns" "$skipped"
+fi
+if [ "$errors" -gt 0 ]; then exit 1; else exit 0; fi

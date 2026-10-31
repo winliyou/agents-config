@@ -26,7 +26,7 @@ description: 本机环境事实：macOS 路径、已装工具、凭据归档位�
 - Go、Rust、Docker（OrbStack）已安装。
 - Node：通过 nvm 管理，已安装直接使用。
 - Bun：已安装（`~/.bun/bin/bun`，官方安装脚本），前端默认包管理器。
-- gh CLI：`/opt/homebrew/bin/gh`（Homebrew 安装；实测为 2.102.0，版本号会变、用时以 `gh --version` 为准），已登录 `winliyou`（git 协议 ssh）。
+- gh CLI：`/opt/homebrew/bin/gh`（Homebrew 安装；版本号会变，用时以 `gh --version` 为准，不要把数字写死——旧文曾写「2.102.0」，2026-10-31 复核已是 2.103.3），已登录 `winliyou`（git 协议 ssh）。
   沙盒内 `gh run view` 的日志缓存可直接写（`~/.cache/gh` 已放行）。
 - 沙盒内 `go install`/`go build`/`go env -w`：`~/go`（整棵，含 `pkg/mod`、`pkg/sumdb`、`bin`）、
   `~/Library/Caches/go-build`、`~/Library/Application Support/go`（GOENV 与遥测）已由
@@ -53,7 +53,7 @@ description: 本机环境事实：macOS 路径、已装工具、凭据归档位�
 
 ## DSH 环境与插件
 
-- **DeepSeek Harness `app.asar` 解包（2026-10-19 实测）**：官方打包的 `/Applications/DeepSeek Harness.app/Contents/Resources/app.asar` 数据区起点是 `16 + align4(headerSize)`，**不是** `16 + headerSize`——本机 `headerSize=4748698`（非 4 的倍数；该数值随 App 版本变化）差 2 字节填充，按后者解出的每个文件首部多 2 字节、尾部少 2 字节：`grep` 看不出问题，字节级比对或 read 会报 invalid UTF-8。已按 header 内每个 entry 的 `integrity.hash`（SHA256）逐文件校验的提取器：`~/.agents/skills/local-environment/scripts/extract-asar.mjs`（用法 `node extract-asar.mjs <outdir> <pathRegex>`，输出 `integrity_bad` 必须为 0 才可信）。
+- **DeepSeek Harness `app.asar` 解包（2026-10-19 实测；2026-10-31 复核公式仍成立）**：官方打包的 `/Applications/DeepSeek Harness.app/Contents/Resources/app.asar` 数据区起点是 `16 + align4(headerSize)`，**不是** `16 + headerSize`——`headerSize` 是 offset 12 处的 uint32LE，**该数值随 App 版本变化，不要写死**（用 `node -e 'const b=require("fs").readFileSync(p).subarray(0,16);console.log(b.readUInt32LE(12))'` 现读）；它不是 4 的倍数时需按 `(4 - headerSize % 4) % 4` 补字节（旧文写死「4748698、差 2 字节」，实际值已变），按后者解出的每个文件首部少算填充、尾部多算：`grep` 看不出问题，字节级比对或 read 会报 invalid UTF-8。已按 header 内每个 entry 的 `integrity.hash`（SHA256）逐文件校验的提取器：`~/.agents/skills/local-environment/scripts/extract-asar.mjs`（用法 `node extract-asar.mjs <outdir> <pathRegex>`，输出 `integrity_bad` 必须为 0 才可信）。
 - **`dsh` CLI 的 profile 写入红线与插件离线实测（2026-10-19 实测）**：`dsh` 任何子命令在 profile prepare 阶段都会**写** `$DSH_HOME`（沙盒内直接跑 `dsh web --help` 即 `EPERM ... ~/.dsh/profiles/<name>/cordis.yml`）→ 跑 `dsh` 前必须先 `DSH_HOME=<workspace 内副本>`。`~/.dsh/profiles/<name>` 用的是 pnpm `nodeLinker: hoisted`（见其 `pnpm-workspace.yaml`），`node_modules/@chaoset/*` 是**实体目录不是符号链接**，因此验证本地插件改动**不必**走会联网重解依赖的 `dsh plugin add`：rsync 复制 profile 到 workspace 内副本后，原地覆盖该包 `files` 清单（`lib`、`client`、`cordis.patch.yml`、`package.json`、README/CHANGELOG/LICENSE）即可离线升级（实测 `DSH_HOME=<副本> dsh web --port <空闲端口> --no-open` 约 1 秒起，`curl` 插件路由可用）。副本内含 `.credentials.yaml` 等凭据，验证后必须删除；`dsh web` 启动打印的 URL 带 `token=`，留日志前必须 REDACT（`/` 直接 GET 是 401 `dsh web authentication required`，需带 `?token=` 走 303 换 cookie）。
 - **DSH profile 与插件配置（2026-10-27 核实）**：桌面 App（GUI 对话）用 `~/.dsh/profiles/desktop/`，
   `dsh web` 用 `~/.dsh/profiles/web/`；`sandbox-extra-roots` 的 `extraWritableRoots` 等插件配置

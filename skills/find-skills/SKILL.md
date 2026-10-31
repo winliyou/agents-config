@@ -140,28 +140,3 @@ If this is something you do often, you could create your own skill:
 npx skills init my-xyz-skill
 ```
 
-## skill 维护自检（沉淀/整理后跑一遍）
-
-skill 会随会话不断追加，容易漂移。以下三条命令覆盖本轮实际踩到的问题，**每次新增或大改 skill 后跑一次**：
-
-```bash
-# ① 项目专有内容不得出现在用户级 skill（协作仓库名/路径/账号/端口）
-# 括注里的名字是**模式示例**，按本机实际仓库名替换；本行会命中自己，属预期
-grep -rniE "\b(<项目a>|<项目b>|<项目c>|<项目d>|/Users/[a-z]+|uitest_)" ~/.agents/skills/*/SKILL.md
-
-# ② frontmatter 完整（每个 skill 首行 ---，且 description 非空）
-for f in ~/.agents/skills/*/SKILL.md; do head -1 "$f" | grep -q '^---' || echo "缺 frontmatter: $f"; done
-
-# ③ 项目侧：AGENTS.md 的 skill 索引与实际目录一致
-cd <项目根> && comm -3 \
-  <(grep -oE '^\| `[a-z-]+`' AGENTS.md | tr -d '|` ' | sort) \
-  <(ls .agents/skills | sort)
-```
-
-判定与修复：
-- ① 有命中 → **项目事实搬到项目侧**（项目 `AGENTS.md` 或 `.agents/skills/`），机器事实搬 `local-environment`；
-  用户级只留可迁移的通用模式（工具路径如 `~/.hvigor` 属工具事实，可保留）。
-- ③ 有差异 → 补索引条目（**漏索引 = skill 不可发现**，本轮真实踩到）。
-- 同一事实在两处出现即视为漂移：保留一处，另一处改成指针（「见 `xxx` skill」）。
-- 结论互相矛盾时（例如同一文件里旧结论与新结论并存）：**保留结论 + 标注作废原因与日期**，
-  不要两份并存——本轮在鸿蒙实测 skill 里修了两处这类矛盾。

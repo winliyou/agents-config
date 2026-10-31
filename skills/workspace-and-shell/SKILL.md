@@ -18,7 +18,8 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 s
 
 ## skill 发现范围与工具默认输出目录
 
-- skill 发现范围：只认各仓库 `.agents/skills/` 与用户级 `~/.agents/skills/`。`.workwork/` 下的依赖缓存（go-mod、bun caches 等自带 skill）不在发现范围——靠 `.gitignore` 隔离、永不提交；`.claude/skills` 双轨目录不另起一套，一律搬入 `.agents/skills/`。
+- skill 发现范围（DSH `skill-filesystem` 实测，共 5 个根，优先级从高到低）：项目根的 `.dsh/skills`、项目根的 `.agents/skills`、`$DSH_HOME/skills`（本机默认 `~/.dsh/skills`，当前不存在属正常）、`$AGENTS_HOME/skills`（本机 `~/.agents/skills`）、内置 bundled。`.workwork/` 下的依赖缓存（go-mod、bun caches 等自带 skill）不在发现范围——靠 `.gitignore` 隔离、永不提交；`.claude/skills` 双轨目录不另起一套，一律搬入 `.agents/skills/`。
+  - 本机 `~/.dsh/AGENTS.md` 是指向 `~/.agents/AGENTS.md` 的软链，实际只有一份内容，不要在两处分别维护。
 - 各 AI 工具（opencode/claude/superpowers/zcode 等）的默认输出目录应配置指向 `.workwork/`；工具的固定路径配置不解除按工作树隔离的义务——在 worktree 内工作时输出仍写入该 worktree 的 `.workwork/`。
 
 ## shell cwd 被删除 → 后续命令全部报 spawn ENOENT

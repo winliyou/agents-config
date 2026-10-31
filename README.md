@@ -18,6 +18,34 @@ ln -s ~/.agents/bin/agent-browser ~/.local/bin/agent-browser
 - `~/work/dogod/cf_token_and_cert/` 等凭据目录**不在本仓库**，需按 `local-environment` 的描述在新主机单独重建；
 - 项目级配置（各仓库的 `AGENTS.md` 与 `.agents/skills/`）随各项目仓库走，不在这里。
 
-## 第三方 skill
+## 第三方 skill（不归本仓库维护）
 
-`skills/agent-browser` 来自 `vercel-labs/agent-browser`（由 `.skill-lock.json` 锁定来源与 hash），**不要手改**——更新会覆盖。自建 skill 在 `skills/` 下其余目录。
+来自外部仓库或上游发布包，本地改了会被覆盖，**不在维护范围内**：
+
+| 判定来源 | 说明 |
+|---|---|
+| `.third-party-skills` | 显式清单（自动识别不出来时手工登记） |
+| `.skill-lock.json` | skills CLI 锁定的来源与 hash（`agent-browser`、`find-skills`） |
+| frontmatter 特征 | 带 `metadata.author` / `license:` / `argument-hint:` 的上游格式 |
+
+规则：不追着修它们失效的路径/命令、不要求它们带实测日期；**绝不往里追加本地内容**
+（上游更新会静默冲掉），需要补充就写自建 skill。`skill-lint` 默认跳过，输出 `SKIP` 属预期，
+加 `--with-third-party` 才检查。
+
+## 知识保鲜与自检
+
+沉淀会腐烂：旧结论随工具升级、项目迭代变成错误，继续沿用会主动误导后续 AI。
+规程见 `knowledge-maintenance` skill，红线见 `AGENTS.md`「知识保鲜」一节。
+
+```bash
+skill-lint                    # 体检用户级 skills（~/.agents/skills）
+skill-lint --all              # 体检用户级 + ~/work 下全部项目级
+skill-lint --json             # 机器可读
+skill-lint --with-third-party # 连第三方 skill 一起查（默认跳过）
+```
+
+检测：frontmatter 缺失（DSH 会静默忽略该 skill）、description 超 500 字符（目录截断丢触发词）、
+引用路径不存在、引用不存在的 skill 名、全文无实测日期、项目级孤儿 skill（无任何 Markdown 提及）。
+
+退出码 0 = 无 ERROR。**每次新增或大改 skill 后建议跑一次**；ERROR 必修，WARN 逐条判断
+（「路径不存在」在说明某文件本机未配置时属正确描述，脚本已对含「不存在/未配置」的行豁免）。
