@@ -7,8 +7,6 @@ description: Svelte 5 编译/样式作用域与组件测试踩坑：注释里的
 
 ## 坑：切全局 runes store 后「旧实例」的 DOM 被同步改写
 
-（2026-10-08 实测于 Svelte 前端组件测试）
-
 组件内 `$derived` 读取全局 runes store（如 `mapSourceStore.source`）时，测试里
 `render()` 出的实例是**活着的**——在同一个 `it` 内 `setMapSource('osm')` 会触发
 **第一个实例**的 derived 重算与 DOM 更新。表现为：先 render 读值、再切 store、
@@ -36,8 +34,6 @@ expect(aLeft).not.toBe(b.container.querySelector('button')!.style.left);
 
 ## 坑：测试替身掩盖传参类型错误 → NaN 传染
 
-（2026-10-08 实测）
-
 **症状**：重写 `scheduleAmbient` 后，"稀疏性"测试失败显示平均间隔异常小；
 插桩发现游标 `nextAt` 首次迭代就变 `NaN`，循环只走一轮——但所有 rnd 序列、
 手动复算全部正常，极易误判成随机数或循环条件问题。
@@ -61,8 +57,6 @@ NaN 一路传染进 `state.nextAt`。`while (x < NaN)` 恒 false，循环静默�
 
 ## 坑：`<script>` 注释里写标签字面量 → 编译器报脚本块未闭合
 
-（2026-10-16 前端组件开发实测）
-
 在组件 `<script>` 块的 `//` 注释里出现 `<style>`（或任何标签字面量）时，
 `svelte-check` 会报 **`<script>` was left open**（`element_unclosed`），且**报错位置指向文件末尾/样式块**，
 与真正出错的那行注释相隔上百行，极易误判成样式块或模板问题。
@@ -72,8 +66,6 @@ NaN 一路传染进 `state.nextAt`。`while (x < NaN)` 恒 false，循环静默�
 **修法**：注释改用中文描述（"组件样式块"、"标签字面量"），不要在内联注释里写 `<xxx>` 形式的标签。
 
 ## 坑：内联 style 里写 animation + 组件内 @keyframes = 动画永不生效
-
-（2026-10-16 实测）
 
 Svelte 会给组件样式块里的 `@keyframes` **加作用域前缀**（`toastIn` → `svelte-1abc2de-toastIn`），
 而内联 `style="animation: toastIn ..."` 里的名称是**字面量字符串**，永远不会被改写 ⇒：
@@ -88,7 +80,7 @@ Svelte 会给组件样式块里的 `@keyframes` **加作用域前缀**（`toastI
 
 ## 坑：模板引用未导入标识符 → 应用挂载崩溃，构建不报错
 
-（2026-10-18 实测于 Svelte 迁移；svelte@5.57.2 + vite@8.3.4）
+（svelte@5.57.2 + vite@8.3.4 环境）
 
 ### 症状
 
@@ -121,10 +113,8 @@ Svelte 会给组件样式块里的 `@keyframes` **加作用域前缀**（`toastI
 
 ## 附：DSH 工具链注意
 
-（2026-10-08 实测）
-
-- 同一文件的多处修改一律**串行**执行或一次脚本完成：早期实测 `Promise.all` 并发 edit
-  同一文件曾静默丢失部分改动；当前 DSH 会把写操作串行化，但不要依赖竞态行为；
+- 同一文件的多处修改一律**串行**执行或一次脚本完成：`Promise.all` 并发 edit
+  同一文件会静默丢失部分改动；当前 DSH 会把写操作串行化，但不要依赖竞态行为；
 - edit 工具 old_string 报 not found 但文本肉眼可见存在时，直接 node 正则替换更快；
 - bun install 在沙盒内报 `unable to write files to tempdir: EPERM`：错误文案有误导，真因是包缓存目录
   不可写；把该目录加进 sandbox-extra-roots 配置即可（见 `sandbox-adaptation`），不要重定向 `TMPDIR`（无效）。

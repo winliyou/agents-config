@@ -5,7 +5,7 @@ description: 独立网站通用约定：子域划分、IPv6-only 寻址、顶级
 
 # 独立网站通用约定（Web Service Conventions）
 
-多站点（各独立子域）统一遵守，单站 AGENTS 不重复写，冲突时以本 skill 为准。源自网关与契约重构实战。
+多站点（各独立子域）统一遵守，单站 AGENTS 不重复写，冲突时以本 skill 为准。
 
 ## 域名、寻址与顶级入口
 
@@ -27,11 +27,11 @@ description: 独立网站通用约定：子域划分、IPv6-only 寻址、顶级
 
 ## 静态站网关：SPA fallback 不吞资源 404
 
-- 现象与判据（2026-10-07 实测）：`try_files $uri $uri/ /index.html` 类回退无条件生效时，缺失的 json/图片会返回 200 HTML，前端资源加载器（PixiJS Assets.load 等）拿到 HTML 解析失败，表现为启动挂死且 console 无错误（本地 dev/preview 尊重 Accept 头不复现，仅线上炸）。用「静态 #boot 文字未移除 + 某请求长期 pending」定位。
+- 现象与判据：`try_files $uri $uri/ /index.html` 类回退无条件生效时，缺失的 json/图片会返回 200 HTML，前端资源加载器（PixiJS Assets.load 等）拿到 HTML 解析失败，表现为启动挂死且 console 无错误（本地 dev/preview 尊重 Accept 头不复现，仅线上炸）。用「静态 #boot 文字未移除 + 某请求长期 pending」定位。
 - 写法：资源扩展名走独立 location `try_files $uri =404`，fallback 只服务页面路由。
 - 同一根域混合多个游戏/应用时，子路径应用用 `root`（非 alias：URI 首段=目录名，嵌套 location 可继承 root；alias 与 try_files 拼接是著名坑）+ 嵌套资源 404 location，根应用占 / 时子路径无尾斜杠 301。
 
 ## 代理下「直连源站」的核验陷阱
 
-- 本机有代理时，curl/浏览器「直连源站」的结论可能全是假的（2026-10-07 审计实战）：环境变量代理下 curl 走 CONNECT 隧道，看到的证书 issuer 是 Cloudflare 边缘证书（Google Trust Services）而非源站 Origin CA——所谓「绕过 CF 直连」实际测的是 CF。核对点：curl -v 出现「CONNECT tunnel」= 走了代理；真直连用 --noproxy '*'（或 openssl s_client 指定源站 IPv6）。
+- 本机有代理时，curl/浏览器「直连源站」的结论可能全是假的：环境变量代理下 curl 走 CONNECT 隧道，看到的证书 issuer 是 Cloudflare 边缘证书（Google Trust Services）而非源站 Origin CA——所谓「绕过 CF 直连」实际测的是 CF。核对点：curl -v 出现「CONNECT tunnel」= 走了代理；真直连用 --noproxy '*'（或 openssl s_client 指定源站 IPv6）。
 - 服务器本机 curl 容器 ipvlan IPv6 必然 000（ipvlan 不允许宿主↔容器直通），不代表外部不通；源站 mTLS 闸的有效证据是直连握手出现 Request CERT 且 HTTP 层 400，与已知带闸站点行为对照。

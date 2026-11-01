@@ -11,7 +11,7 @@ description: Docker 优先原则：服务运行、集成/E2E 测试、构建与�
 - 先查现状：使用前检查本地已有镜像、容器和端口占用（`docker images`、`docker ps`、`docker compose ps`），优先复用，不凭记忆假设服务状态。
 - 开发期免重复 build：优先用源码挂载、缓存卷、watch 进程、本地编译产物挂载加速，进程仍运行在容器内；修改依赖、系统包、环境变量、Dockerfile 或启动命令后，必须重建相关镜像/容器。
 - 发布前必构建验证：发布/交付/部署任务必须执行 `docker build` / `docker compose build`，并基于新构建镜像完成验证；不得只用宿主机或挂载开发容器的结果宣称发布可用。
-- 镜像清理：构建或拉取新镜像后按需 `docker image prune` 清理旧版本；不要把 `volume prune` 当作常规步骤。
+- 镜像清理：构建或拉取新镜像后按需 `docker image prune` 清理不再使用的版本；不要把 `volume prune` 当作常规步骤。
 - 一致性记录：因硬件、GUI、Android 模拟器等原因只能在宿主机执行的验证，必须说明原因，并尽量补充 Docker 内可执行的构建、接口或服务级验证。
 
 ## worktree 隔离（实战）
@@ -32,6 +32,6 @@ description: Docker 优先原则：服务运行、集成/E2E 测试、构建与�
 
 ## 沙盒内用 docker
 
-`~/.docker/buildx` 已由 sandbox-extra-roots 放行（2026-10-31 复核：desktop/web 两个 profile 均含该条；含 registry 凭据的 `config.json` 有意不放写），沙盒内 `docker build`/`docker compose build` 直接跑。**不要重定向 `DOCKER_CONFIG`**（会把 registry 凭据搬进 workspace）；报 `open ~/.docker/...: operation not permitted` 时，把该目录加进插件配置即可（见 `sandbox-adaptation`）。
+`~/.docker/buildx` 已由 sandbox-extra-roots 放行（desktop/web 两个 profile 均含该条；含 registry 凭据的 `config.json` 有意不放写），沙盒内 `docker build`/`docker compose build` 直接跑。**不要重定向 `DOCKER_CONFIG`**（会把 registry 凭据搬进 workspace）；报 `open ~/.docker/...: operation not permitted` 时，把该目录加进插件配置即可（见 `sandbox-adaptation`）。
 
-- **退出码不可靠**：buildx/构建命令失败时退出码可能仍是 0（历史上 `| tail` 把失败吞掉），必须看输出文本判成功；长命令先落盘再取退出码：`cmd > log 2>&1; echo "[exit=$?]"`。
+- **退出码不可靠**：buildx/构建命令失败时退出码可能仍是 0（`| tail` 会把失败吞掉），必须看输出文本判成功；长命令先落盘再取退出码：`cmd > log 2>&1; echo "[exit=$?]"`。

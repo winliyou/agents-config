@@ -15,7 +15,7 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 - 主工作树禁止的 git 写操作：`commit`、`checkout`、`switch`、`reset`、`rebase`、`cherry-pick`、`stash`、非 `--ff-only` 的 `merge`、新建/改名/非 `-d` 删除的 `branch`、推送非主干分支（见下条）。
 - **开发分支（feature/fix/refactor 等）一律禁止推送到远程**：分支只在本地 Worktree 生命周期内存在，合并进主分支后即删除。任何情况下不执行 `git push origin <开发分支>`（含 `-u` / `--set-upstream`）；`git push` 仅允许推送合并后的主分支与发版 tag。**唯一例外：`~/AGENTS.md` Git 红线中点名的那条 `alpha` 适配线**（收敛后彻底删除；用户级 skill 不写具体仓库名）；远程仓库只应存在主干分支、该 `alpha` 线与 CI 自动创建的分支（dependabot 等）；发现远程出现开发分支即为违规，须先合并或确认丢弃，再删除远程分支。
 - 主工作树存在未提交改动且挡住合并时：若改动内容已逐字节确认完整存档进待合并分支，允许清理这些文件（`git restore <paths>`）；否则先与用户确认处置方式，不得擅自丢弃。
-- **修复敏感性验证（改坏 → 断言失败 → 恢复）的恢复步骤用 `cp` 备份，禁止用 `git checkout <file>` / `git restore <file>` 撤销探测**：探测点尚未提交时，这两条命令会把文件回退到 HEAD，直接丢掉本次全部改动（2026-10-16 在 worktree 内实测踩到，只能整份重做编辑）。恢复统一写 `cp /tmp/<name>.bak <file>`，并在探测后 `git diff --stat` 确认改动仍在。
+- **修复敏感性验证（改坏 → 断言失败 → 恢复）的恢复步骤用 `cp` 备份，禁止用 `git checkout <file>` / `git restore <file>` 撤销探测**：探测点尚未提交时，这两条命令会把文件回退到 HEAD，直接丢掉本次全部改动（只能整份重做编辑）。恢复统一写 `cp /tmp/<name>.bak <file>`，并在探测后 `git diff --stat` 确认改动仍在。
 - 探测脚本要保证「编译通过但行为退化」，否则 build failed 会掩盖真正的断言失败（例：把参数改成空串时顺手留下未使用变量 → Go 报 declared and not used，看不到测试断言）。
 - 每条并行线一个 Worktree，互不干扰；Worktree 内可自由 rebase/reset/amend 整理历史。
 - Worktree 位置：项目根 `.worktrees/<分支名>`（已 gitignore），避免污染主仓库 git status；基线除非用户指定，一律基于本地主分支创建（`git worktree add -b <分支名> .worktrees/<分支名> main`），创建前确认主分支已同步到最新。
@@ -29,11 +29,11 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
    - `git worktree remove .worktrees/<分支名>`，再 `git branch -d <分支名>`（必须先 remove 再 -d，分支被 worktree 占用时无法删除；可先 `git branch --merged main` 做防御性确认）；
    - 若 `worktree remove` 因存在未跟踪文件失败，先检查是否为需要保留的产物（`.workwork/` 中间产物默认可丢弃），再决定是否 `--force`。
 4. 推送在主工作树进行：`git push`（推送合并后的 main）；发版 tag 打在合并后的 main 上再推送。Worktree 内的 commit 不直接 push，开发分支也不推远程建立跟踪——只有合并进主分支的更改才推送。
-5. **改动必须写在 worktree 内的路径上**（2026-10-19 实测踩坑）：会话 cwd 是主工作树，edit/write 工具按该 cwd 解析相对路径——在 worktree 会话里用「主树路径 / 无前缀相对路径」改文件，会把改动落在**主检出**；随后在 worktree 内 `git commit` 得到 `nothing to commit`（改动仍在主树未提交，且 worktree 一旦删除，主树那份就成了游离改动）。规则：
+5. **改动必须写在 worktree 内的路径上**：会话 cwd 是主工作树，edit/write 工具按该 cwd 解析相对路径——在 worktree 会话里用「主树路径 / 无前缀相对路径」改文件，会把改动落在**主检出**；随后在 worktree 内 `git commit` 得到 `nothing to commit`（改动仍在主树未提交，且 worktree 一旦删除，主树那份就成了游离改动）。规则：
    - 动手前 `pwd` 确认；改文件一律用 **worktree 绝对路径**（`<repo>/.worktrees/<name>/...`）；
    - `git add -A` 后先看 `git status --short` 与 `git diff --stat` **非空**再 commit；空则立刻查是不是改到了主树；
    - 已经改错时：把主树那份改动复制进 worktree 正常提交，然后 `git checkout -- <path>` 还原主树（**不要**在主树提交——那是 Git 红线），并在提交信息里如实记录。
-   - **验证侧的对称坑（2026-10-24 实测）**：worktree 改完后，所有核对命令（`git status`/`git diff`/`grep`/`sed`）若不带 workdir/`cd`，看到的是**主树**——会把已完成的改动误判为「没生效」，也会把主树的旧内容误当 worktree 现状，来回排查浪费时间。规则：worktree 会话里每条核对命令都必须显式带 workdir 或命令开头 `cd <worktree>`；以 worktree 内 `git diff` 为唯一事实源，不要靠记忆拼凑多轮输出。
+   - **验证侧的对称坑**：worktree 改完后，所有核对命令（`git status`/`git diff`/`grep`/`sed`）若不带 workdir/`cd`，看到的是**主树**——会把已完成的改动误判为「没生效」，也会把主树的旧内容误当 worktree 现状，来回排查浪费时间。规则：worktree 会话里每条核对命令都必须显式带 workdir 或命令开头 `cd <worktree>`；以 worktree 内 `git diff` 为唯一事实源，不要靠记忆拼凑多轮输出。
 
 ## Commit 格式
 
@@ -44,9 +44,9 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 Model: <模型名>
 ```
 
-- **多行/含引号的提交消息一律用 `-F <文件>`，不要内联 `-m`（2026-09-25 实测）**：消息里出现 ASCII 双引号时，外层 shell 的双引号包裹会在第一个 `"` 处截断，`git commit` 静默失败或把消息剩余部分当独立命令执行——stdout 还常常是空的，极易误以为成功。安全做法：把消息写入临时文件后 `git commit -F <文件>`；提交后必须 `git log --oneline` + `git show --stat` 复核提交数与文件归属，不能只看命令退出与否。
+- **多行/含引号的提交消息一律用 `-F <文件>`，不要内联 `-m`**：消息里出现 ASCII 双引号时，外层 shell 的双引号包裹会在第一个 `"` 处截断，`git commit` 静默失败或把消息剩余部分当独立命令执行——stdout 还常常是空的，极易误以为成功。安全做法：把消息写入临时文件后 `git commit -F <文件>`；提交后必须 `git log --oneline` + `git show --stat` 复核提交数与文件归属，不能只看命令退出与否。
 
-  **临时文件必须落在被 gitignore 的目录内（2026-10-11 实测）**：写 `.workwork/commit-msg.txt`（目录整体被忽略）是安全的；写成同前缀的**根目录文件** `.workwork-commit-msg.txt` 只差一个 `/`，却不在忽略规则内——`git add -A` 会把它一路带进提交，且因为每次 commit 后 `rm`、下次又新建，会**连续多个提交**都夹带它，直到有人发现。判据：临时文件路径的**父目录**必须出现在 `.gitignore` 里，不能只靠文件名前缀相似。
+  **临时文件必须落在被 gitignore 的目录内**：写 `.workwork/commit-msg.txt`（目录整体被忽略）是安全的；写成同前缀的**根目录文件** `.workwork-commit-msg.txt` 只差一个 `/`，却不在忽略规则内——`git add -A` 会把它一路带进提交，且因为每次 commit 后 `rm`、下次又新建，会**连续多个提交**都夹带它，直到有人发现。判据：临时文件路径的**父目录**必须出现在 `.gitignore` 里，不能只靠文件名前缀相似。
 
 ## 版本号以 tag 为源（发版项目，实战）
 
@@ -57,6 +57,12 @@ Model: <模型名>
   3. 合并进主分支后，在主工作树于当前 commit 打 tag 并推送（**先推分支、再单独推 tag**，命令见下节「打 tag 与推送纪律」；tag 必须在要发布的 commit 上，且落在 `origin/main` 上）。
   4. 随后构建即得到干净版本号（`git describe` 在 tag 上无 `-dev` 后缀）。
 - tag 后有新 commit 的构建必须带 `-dev.N` 后缀标识未发布构建；无 tag 时 fallback 默认版本，不阻断构建。
+- **部署端必须显式 `git fetch --tags origin`**：`git pull` 只保证分支更新，
+  不保证发布 tag 到达部署机（实测服务器缺 tag 时 `git describe` 回退成
+  `v1.2.0-11-g<sha>`，镜像版本烙印与发布 tag 不一致）。部署脚本应在 pull
+  后拉 tag，并在「最近 tag 变化」时重建全部产物以更新版本烙印；手工部署
+  同样先 fetch tags 再 build。
+
 
 ## 打 tag 与推送纪律（任何仓库通用，CI 由 tag 触发时尤其关键）
 
@@ -70,7 +76,7 @@ Model: <模型名>
    「Events will not be created for tags when more than three tags are pushed at
    once.」上限是**推送批次**的粒度——推 4 个是**全部**不触发，不是「前 3 个能过」。
    `delete` 事件同样限 3 个一批（同页 `delete` 一节原文：「An event will not be created
-   when you delete more than three tags at once.」，2026-10-31 复核），所以**删 tag 也要一个一个删**。
+   when you delete more than three tags at once.」），所以**删 tag 也要一个一个删**。
    > 注意两节措辞不完全一样：`create` 节写的是「create more than three tags at once」，
    > `push`/`delete` 才是限制实际生效的位置——判断以 push/delete 为准。
 2. **逐个推还不够：连推不等会取消流水。** 若 workflow 用了仓库级并发组
@@ -116,24 +122,24 @@ done
   `git tag -d <tag> && git push origin :refs/tags/<tag>`，然后重打重推。
   删远程 tag 前先确认没有同名 Release。远程 tag 同样要**一个一个删**。
 - **Release/发布已建**：**永不删、不移动该 tag**，升版本号打新 tag 覆盖叙事。
-- 版本号用过即作废：即使删了 tag 重打，也只允许 tag 内容逐字节一致的**原样重打**，
+- 版本号用过即不可复用：即使删了 tag 重打，也只允许 tag 内容逐字节一致的**原样重打**，
   不得借机改内容或复用版本号发别的东西。
 
-**推送后必须确认 CI 实际结果（2026-09-25 实测教训）**：
+**推送后必须确认 CI 实际结果**：
 
 - `git push` 成功 ≠ CI 通过。tag/分支推送后用 `gh run list --limit 3` 核对结论；
   需要失败日志时直接 `gh run view <id> --log-failed`
   （`~/.cache/gh` 已由 sandbox-extra-roots 放行；报 EPERM 就把该目录加进插件配置，见 `sandbox-adaptation`）。
-- CI 长期红会被「上次也是红的」麻痹成常态：曾有项目 Linux CI 因某测试缺平台门控连续挂了 5 次（含纯文档提交）才被发现。
+- CI 长期红会被「上次也是红的」麻痹成常态——Linux CI 因某测试缺平台门控可连续挂 5 次（含纯文档提交）才被发现。
   看到连续失败必须先修再发，不许带红 tag 发布。
 - 同一 commit 双 run（tag 触发 + 分支触发）一绿一红，优先怀疑时间敏感用例 flaky：
   `gh run rerun <id>` 重跑确认；确认 flaky 后应修测试的时间阈值，而不是反复重跑。
-- **GitHub Billing 失败（已解决）**：GitHub 账号曾因「recent account
-  payments have failed or your spending limit needs to be increased」导致私有仓库
-  Actions 全部 3-13s 即败。**现行策略（用户已定：不再充值）：碰到该注解的失败
+- **GitHub Billing 失败**：GitHub 账号出现「recent account
+  payments have failed or your spending limit needs to be increased」注解时，私有仓库
+  Actions 全部 3-13s 即败。**现行策略（不再充值）：碰到该注解的失败
   直接忽略，不 rerun、不排查、不当发布阻塞；正确动作只有一个——把仓库转 public
-  走标准 CI**（public 仓库 Actions 免费不限额；已在仓库转 public 后核实）。
-  **不要走「私有仓库本地构建发版」的替代路径**——该兜底流程已被本策略废弃，
-  不再维护其操作细节（历史做法见对应仓库的 git 历史；具体时间点/版本号属项目事实，
+  走标准 CI**（public 仓库 Actions 免费不限额）。
+  **不要走「私有仓库本地构建发版」的替代路径**——该兜底流程不作为现行方案，
+  不维护其操作细节（具体实现见对应仓库的 git 历史；具体时间点/版本号属项目事实，
   写在项目侧文档，不记在本 skill）。
   除 Billing 注解外，CI 失败仍按上两条处理，不得借本条豁免其他红灯。

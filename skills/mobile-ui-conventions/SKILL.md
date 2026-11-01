@@ -8,12 +8,12 @@ description: 移动端与 TV 端 UI 通用约定（跨 ArkUI / Compose / Android
 跨项目、跨技术栈通用的界面约束（ArkUI/ArkTS、Jetpack Compose、Android TV、HarmonyOS）。
 **具体 token 名、档位表、组件与主题体系见各项目自己的 skill**，本文件只记与项目无关的硬性约束。
 
-这些约束在多个不同仓库、不同技术栈（Kotlin/Compose 的 TV 端、ArkTS/ArkUI 的手机端）中被**独立重复验证过**——属平台级常识，故上提到用户级。
+这些约束在多个不同仓库、不同技术栈（Kotlin/Compose 的 TV 端、ArkTS/ArkUI 的手机端）中**独立成立**——属平台级常识，故上提到用户级。
 
 ## 1. 可操作面积不能小于触控下限
 
 - 可聚焦/可点击控件（按钮、chip、图标按钮、列表行）必须保证足够热区，**用约束最小尺寸而非固定高度**，避免被父布局压缩：
-  - ArkUI：`constraintSize({ minHeight })`，图标按钮用 padding 补足；热区下限取 ≥44vp（本机项目实测基线；「官方 40vp/推荐 46」在本地文档中未找到依据，不作为硬口径）；Android/Compose 侧常用 48dp 下限
+  - ArkUI：`constraintSize({ minHeight })`，图标按钮用 padding 补足；热区下限取 ≥44vp（本机项目基线；「官方 40vp/推荐 46」在本地文档中未找到依据，不作为硬口径）；Android/Compose 侧常用 48dp 下限
   - Compose/TV：`requiredHeight` / `requiredSize`（`required*` 不被父级压缩），**不要**用普通 `height` / `size`
 - 图标按钮尤其容易踩：视觉尺寸可以小，但**热区必须补够**。
 
@@ -46,7 +46,7 @@ description: 移动端与 TV 端 UI 通用约定（跨 ArkUI / Compose / Android
 ## 6. 弹层与菜单优先用系统原生组件
 
 - 弹出菜单一律用系统原生 `Menu`/`MenuItem`/`MenuItemGroup`（ArkUI）或 Material 菜单，**不要自绘菜单卡片**：磨砂/圆角/行高/字号/按压反馈/分组分隔线由系统托管，深浅色自动适配。
-- 自绘的典型症状：实心底 + 描边 + 重投影 = 与系统割裂的「Android 风格」；自绘玻璃（背景模糊）易出现**浅色模式浅底浅字**（已踩坑）。
+- 自绘的典型症状：实心底 + 描边 + 重投影 = 与系统割裂的「Android 风格」；自绘玻璃（背景模糊）易出现**浅色模式浅底浅字**。
 - 破坏性操作（删除等）在原生菜单里没有红色危险项语义时，**用二次确认对话框**承接。
 - **文本与开关必须显式指定前景/选中色**，不要依赖系统默认：默认色随系统主题变化，在自定义底色上会出现深底深字不可见（ArkUI 的 `TextInput` 需显式设 `fontColor`/`placeholderColor`，`Toggle` 需显式 `selectedColor`）。
 
@@ -59,7 +59,7 @@ description: 移动端与 TV 端 UI 通用约定（跨 ArkUI / Compose / Android
 
 > 本节虽是 Web/CSS 案例，但坑位在「窄视口（手机真机尺寸）」才暴露，故暂寄本 skill；纯 Web 项目读到此节同样适用。
 
-- 现象（2026-09 实测）：桌面正常的横排中文卡片，在 390px 真机尺寸下逐字竖排；排查时 DevTools
+- 现象：桌面正常的横排中文卡片，在 390px 真机尺寸下逐字竖排；排查时 DevTools
   计算值全正常（flex/padding/换行属性无一异常），属隐蔽布局债。
 - 根因（两条，独立叠加）：
   1. 一条高特异度通配按钮规则（如 `.panel button`）覆盖了卡片自身的 padding，

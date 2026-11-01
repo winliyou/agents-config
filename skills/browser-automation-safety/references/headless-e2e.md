@@ -2,20 +2,20 @@
 
 > 本文是 browser-automation-safety 的 reference：用 agent-browser 写 E2E / 冒烟 / 跑批脚本时的可见性与帧驱动问题、eval 表达式限制、脚本 session 命名。排查「帧驱动断言全超时」「ref 失效」「长会话 eval 返回 null」时读。
 
-## 一、headless 会话的 rAF/可见性（2026-10-28 E2E 迁移实测）
+## 一、headless 会话的 rAF/可见性
 
 
 **现象**：headless 会话默认 `document.visibilityState === "hidden"` 且 **requestAnimationFrame 完全不触发**
-（实测 1 秒 0 帧）——依赖逐帧更新的应用（游戏渲染循环、每帧 UI 同步、进度条/倒计时）会全部停摆，
+（1 秒 0 帧）——依赖逐帧更新的应用（游戏渲染循环、每帧 UI 同步、进度条/倒计时）会全部停摆，
 "E2E 全过"的假象只覆盖事件驱动断言，帧驱动断言（击杀计数、面板随 state 显隐、动画推进）全部超时。
 
-**修复**：会话冷启动时经 `AGENT_BROWSER_ARGS` 注入三件套（无逗号值,可安全并列）：
+**做法**：会话冷启动时经 `AGENT_BROWSER_ARGS` 注入三件套（无逗号值,可安全并列）：
 ```
 --disable-background-timer-throttling,--disable-renderer-backgrounding,--disable-backgrounding-occluded-windows
 ```
-实测恢复 `visibilityState === "visible"` + rAF 61 帧/秒(与应用 60 上限一致)。
+效果：`visibilityState === "visible"` + rAF 61 帧/秒(与应用 60 上限一致)。
 
-**⚠️ 自设 `AGENT_BROWSER_ARGS` 会挤掉 wrapper 的反检测注入（2026-10-31 复核 wrapper 源码）**：
+**⚠️ 自设 `AGENT_BROWSER_ARGS` 会挤掉 wrapper 的反检测注入**：
 wrapper 的逻辑是 `if (!process.env.AGENT_BROWSER_ARGS) 注入 --disable-blink-features=AutomationControlled`。
 你自己设了这个变量，wrapper 就**不再补**那一条 → `navigator.webdriver` 变回 `true`。
 所以注入上面三件套时**必须把 `--disable-blink-features=AutomationControlled` 一起带上**：

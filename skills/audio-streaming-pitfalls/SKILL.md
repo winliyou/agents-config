@@ -5,7 +5,7 @@ description: 跨设备实时音频流（采集→传输→播放）的正确架�
 
 # 跨设备实时音频流：采集 → 传输 → 播放
 
-实测架构（桌面端串流：Windows 游戏音频 → macOS 播放，2026-10-18 用户确认声音正常）：
+架构（桌面端串流：Windows 游戏音频 → macOS 播放）：
 
 ## Windows 系统声捕获（WASAPI Loopback / miniaudio）
 
@@ -49,7 +49,7 @@ description: 跨设备实时音频流（采集→传输→播放）的正确架�
 
 ## 播放端解码能力差异（WebCodecs 并非全平台）
 
-- **Chrome/Edge/WebView2 有 `AudioDecoder`；Safari 与 WKWebView 没有**：2026-10-21 实测 macOS 15.8 的
+- **Chrome/Edge/WebView2 有 `AudioDecoder`；Safari 与 WKWebView 没有**：macOS 15.8 的
   WKWebView 里 `typeof AudioDecoder === 'undefined'`（`VideoDecoder` 存在）。Safari 浏览器同理。
 - 危险的自检陷阱：这类 WebView 里 `isSecureContext === true`、AudioWorklet 可用，于是
   "Web Audio 能跑"会被误判成"Opus 能解码"；表现为**WS 有音频字节流入（码率正常）但完全无声**。
