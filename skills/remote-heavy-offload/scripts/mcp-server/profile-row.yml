@@ -1,0 +1,19 @@
+# 远程子代理：把 192.168.2.3 上的 dsh 作为 MCP 工具暴露给本会话（mcp__remote__*）
+# 用法：把本文件内容追加到目标 profile 的 cordis.patch.yml 末尾（desktop 与/或 web），
+# 然后重启 dsh 应用（或等 profile HMR），新开会话生效。
+# 注意：command 指向 skill 内的 run.sh（单文件 bundle，无需安装、无 node_modules）。
+- insert:
+    - id: mcp-remote-subagent
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: remote
+        transport: stdio
+        command: /Users/liyou/.agents/skills/remote-heavy-offload/scripts/mcp-server/run.sh
+        args: []
+        env:
+          HOME: /Users/liyou
+          PATH: /usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin
+          REMOTE_SSH_HOST: dsh-arch
+          REMOTE_WORKSPACE: /home/liyou/workspace
+          REMOTE_DSH: /home/liyou/.local/bin/dsh
+        toolCallTimeoutMs: 600000
