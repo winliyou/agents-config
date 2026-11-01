@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# skill-lint — 检测 AGENTS.md / skill 知识库中的「已失效」事实
+# skill-lint — 检测 AGENTS.md / skill 知识库中的「已失效」事实与「流水账」写法
 #
 # 用途：经验沉淀会随项目迭代腐烂。本脚本把「能机器判定」的腐烂类型一次性扫出来，
 #       避免 AI 沿用过期事实误导后续工作。
@@ -14,6 +14,8 @@
 # 第三方 skill 默认跳过：它们由上游维护、本地改了会被覆盖，不纳入本地维护范围。
 # 判定来源：~/.agents/.third-party-skills 清单 + .skill-lock.json + 上游 frontmatter 特征。
 #
+# 文档写法：正文日期、变更记录/更新日志/时间线/踩坑记录类章节 = ERROR；
+#           变更史式短语（已作废/修复前/旧文…）= WARN。代码块与文件名中的日期除外。
 # 退出码：0 = 无 ERROR（可能有 WARN）；1 = 有 ERROR。
 set -uo pipefail
 
@@ -76,6 +78,36 @@ emit() {
   if [ "$1" = "ERROR" ]; then errors=$((errors+1)); else warns=$((warns+1)); fi
 }
 
+# ---- 文档写法检查：日期与变更史章节是 ERROR；叙事式短语是 WARN ----
+doc_check() {
+  local file="$1" label="$2" with_phrases="$3" hit
+  while IFS= read -r hit; do
+    [ -z "$hit" ] && continue
+    emit ERROR "$label" "正文含日期标注（只写现状，历史交给 git）：$hit"
+  done < <(awk 'BEGIN{fence=0}
+    /^[[:space:]]*```/ {fence=!fence; next}
+    fence {next}
+    /20[0-9][0-9][-年][0-9]/ {
+      if ($0 ~ /20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[A-Za-z]/) next
+      print FILENAME":"FNR" | "substr($0,1,70)
+    }' "$file" 2>/dev/null)
+  while IFS= read -r hit; do
+    [ -z "$hit" ] && continue
+    emit ERROR "$label" "存在变更记录/更新日志/时间线/踩坑记录类章节：$hit"
+  done < <(awk 'BEGIN{fence=0}
+    /^[[:space:]]*```/ {fence=!fence; next}
+    fence {next}
+    /^#{1,6}[[:space:]]/ && /(变更记录|更新记录|更新日志|版本历史|修订记录|时间线|历史记录|事故复盘|踩坑记录)/ {
+      print FILENAME":"FNR" | "substr($0,1,70)
+    }' "$file" 2>/dev/null)
+  if [ "$with_phrases" = "1" ]; then
+    while IFS= read -r hit; do
+      [ -z "$hit" ] && continue
+      emit WARN "$label" "含变更史式表述（改写成现状）：$hit"
+    done < <(grep -nE '已作废|已废弃|旧文|修复前|修复后|变更记录|更新记录|版本历史|历史遗留|踩坑记录|事故复盘|上一轮|本次修改|本次更新|本文新增' "$file" 2>/dev/null | sed "s#^#$file:#" | cut -c1-160)
+  fi
+}
+
 declare -a ALL_NAMES=()
 for root in "${ROOTS[@]}"; do
   [ -d "$root" ] || continue
@@ -111,7 +143,7 @@ for root in "${ROOTS[@]}"; do
     fi
 
     # ---- 1b. frontmatter 里未加引号的标量含 ": " → YAML 解析失败，skill 被 DSH 静默忽略
-    #      （2026-10-31 真实踩坑：description 写了 "websites: navigating"，该 skill 直接从目录消失）
+    #      （description 写了 "websites: navigating" 会让该 skill 从目录消失）
     while IFS= read -r bad; do
       [ -z "$bad" ] && continue
       emit ERROR "$name" "frontmatter 的 $bad 值含未加引号的 ': '，YAML 解析会失败导致 skill 被静默忽略（加引号即可）"
@@ -212,12 +244,26 @@ PYEOF
       [ "$found" -eq 0 ] && emit WARN "$name" "引用了不存在的 skill：$ref"
     done < <(grep -ohE '(skill|skills) \`[a-z][a-z0-9-]+\`' "$f" 2>/dev/null | sed -E 's/.*\`([a-z0-9-]+)\`/\1/' | sort -u)
 
-    # ---- 5. 无任何日期标注（无法判断新旧，复核时无从下手）
-    if ! grep -qE '20[0-9]{2}-[0-9]{2}-[0-9]{2}' "$f"; then
-      emit WARN "$name" "全文无实测日期，无法判断时效"
-    fi
+    # ---- 5. 文档写法检查：日期 / 变更史章节 / 变更史短语（只写现状，历史交给 git）
+    #      写法规范自身（knowledge-maintenance）必然引用反例词，跳过短语告警
+    phrases=1
+    [ "$name" = "knowledge-maintenance" ] && phrases=0
+    doc_check "$f" "$name" "$phrases"
+    for ref in "$dir"references/*.md; do
+      [ -f "$ref" ] && doc_check "$ref" "$name" "$phrases"
+    done
+
   done
 done
+
+# ---- 7. AGENTS.md 文档写法检查（全局始终检查；--all 额外覆盖项目 AGENTS.md）
+doc_check "$HOME/.agents/AGENTS.md" "(agents)" 0
+if [ "$ALL" -eq 1 ]; then
+  while IFS= read -r ag; do
+    [ -f "$ag" ] || continue
+    doc_check "$ag" "(agents)" 0
+  done < <(find "$HOME/work" -maxdepth 3 -name 'AGENTS.md'       -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.worktrees/*' -not -path '*/.workwork/*' 2>/dev/null | sort -u)
+fi
 
 # ---- 6. 孤儿 skill：项目级 skill 未被项目 AGENTS.md 索引（AI 很难发现它）
 #      用户级 skill 由 DSH 自动发现挂载，不需要索引，故跳过。

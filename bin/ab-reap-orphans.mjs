@@ -1,12 +1,12 @@
 // ab-reap-orphans.mjs —— 孤儿 agent-browser daemon + headless Chrome 收割器(用户级公共层)
 //
-// 背景(2026-10-27 实测):显式 --session 独立实例(自带 headless Chrome + 临时 profile)的
+// 背景:显式 --session 独立实例(自带 headless Chrome + 临时 profile)的
 // 宿主脚本被 SIGINT/SIGTERM/SIGKILL 打断、或 close 失败被 "|| true" 吞掉时,daemon 与它
 // 拉起的 Chrome 都不会自退(attach 型 daemon 豁免空闲回收),一夜可累积多组孤儿
 // (实测 8 组 ≈112% CPU + 5.2GB 内存,整机 load >15)。wrapper 的 purgeDeadSessionState
 // 只清「进程已死」的残留状态文件,管不到「进程活着但宿主已消失」的实例 —— 本脚本补这一层。
 //
-// 判据(全部实测):
+// 判据:
 //   · 保护名单:shared(owner)、dsh-*/manual-*(房客 attach 模式,不自带 Chrome)、
 //     AB_REAP_PROTECT_SESSIONS 额外名单 —— 一律不碰;
 //   · 候选 = sock 存在且 daemon 存活,且其 Chrome 子进程用临时 profile
@@ -15,9 +15,9 @@
 //     活任务两次采样之间必有命令连接,不会误杀;
 //   · 两段式:首次发现写标记(AB_HOME/.orphan-mark/<会话>),标记年龄 ≥ min-age
 //     (默认 600s)且仍无客户端才收割 —— 宿主无论怎么死(含 SIGKILL)都能兜住;
-//   · 盲区扫描(2026-10-28):daemon 活着但其 sock 已从磁盘消失(wrapper purge 依 .pid
-//     判死跨代误删,实测 cnm-e2e 一个名字泄漏 3 套 daemon+Chrome)——状态文件没了,
-//     目录扫描看不见;sock 已 unlink,任何客户端也无法再连 = 100% 孤儿。按 <名>.<pid>
+//   · 盲区扫描:daemon 活着但其 sock 已从磁盘消失(状态文件被按 .pid 判死误清,或
+//     跨代重建时被连带删除)——目录扫描看不见;sock 已 unlink,任何客户端也无法再连
+//     = 100% 孤儿。按 <名>.<pid>
 //     粒度标记(MARK_DIR/blind/),保护名单与 profiles/main 红线同主路径。
 //
 // 动作:TERM→等 2s→KILL daemon;Chrome 子进程按「pid + user-data-dir 双重核对」
@@ -31,7 +31,7 @@
 //       防 --min-age 0 误杀活跃任务刚拉的会话)、AB_REAP_PROTECT_SESSIONS(逗号分隔)、
 //       AB_ORPHAN_DEBUG=1、AB_TMP_TTL_DAYS(默认 7;tmp/ 内过期截图/HAR 等产物的清理时限)。
 // 附带职责:~/.agent-browser/tmp/ 是工具默认输出目录,截图/HAR 等产物按 TTL 自动清理,
-// 防公共状态目录被当 scratch 无限膨胀(2026-10-27 实测 88MB/126 图)。
+// 防公共状态目录被当 scratch 无限膨胀。
 
 import fs from "node:fs";
 import path from "node:path";
@@ -49,8 +49,8 @@ const verbose = argv.includes("-v") || process.env.AB_ORPHAN_DEBUG === "1";
 let minAge = Number(process.env.AB_ORPHAN_MIN_AGE || 600);
 const mi = argv.indexOf("--min-age");
 if (mi >= 0 && argv[mi + 1] != null) minAge = Number(argv[mi + 1]) || 0;
-// 新鲜度护栏(2026-10-28 事故教训):--min-age 0 会绕过两段式把无标记候选立即收割,
-// 实测误杀了活跃任务 6 分钟前刚拉的会话(r14-after*)。daemon 启动未满 freshSecs 的
+// 新鲜度护栏:--min-age 0 会绕过两段式把无标记候选立即收割,
+// 会误杀活跃任务刚拉起、尚未产生命令连接的会话。daemon 启动未满 freshSecs 的
 // 候选一律跳过 —— 刚引导的会话大概率是活任务在两条命令之间的空档。
 let freshSecs = Number(process.env.AB_ORPHAN_FRESH_SECS || 600);
 const fi = argv.indexOf("--fresh-secs");
@@ -160,7 +160,7 @@ for (const f of fs.readdirSync(AB_HOME)) {
   killed.push(label);
 }
 
-// ---- 盲区扫描(2026-10-28):daemon 活着但其 sock 已从磁盘消失 ----
+// ---- 盲区扫描:daemon 活着但其 sock 已从磁盘消失 ----
 // 形态:同名会话跨代重建时,状态文件与 sock 被清(如 wrapper purge 依 .pid 判死的跨代误删),
 // 上面的目录扫描看不见;sock 已 unlink,任何客户端也无法再连 = 100% 孤儿。
 // 判据:进程 cmdline 含 agent-browser + 其 lsof 打开的 AB_HOME 下 *.sock 路径 fs.existsSync 为假。

@@ -1,61 +1,34 @@
 #!/usr/bin/env bun
-// agent-browser 包装器(TS 版;~/.local/bin 与 ~/.bun/bin 两个入口的 symlink 都指向本文件)
+// agent-browser 包装器：会话管理、静默运行与安全闸门
+// （~/.local/bin 与 ~/.bun/bin 两个入口的 symlink 都指向本文件）
 //
-// 2026-10-15 凌晨自 bash 版重写(bash 版备份:.workwork/backup-agent-browser/)。
-// 参数一律数组 spawn 传递(无 shell 词法拆分),JSON 原生读写,消灭模板串/引号/多字节解析类问题。
+// 架构：一个浏览器 owner + 每个 DSH 会话一个 pinned 房客
+//   · shared session 是纯 owner：只持有 Chrome（profiles/main），永不承载用户命令；
+//   · 每个 DSH 会话是 pinned 房客：独立 session 名 + --cdp owner 端口 + --pin-tab；
+//     --cdp 不是 sticky，必须每次注入，漏传会掉回 owner 并顶掉别人的页面；
+//   · 冷启动先拉起 owner，再以房客身份执行本次命令，避免首次 open 落在 owner 上。
 //
-// 2026-10-15 会话隔离修复(本版核心变更):让"跨会话/跨进程可连接"与"会话间互不影响"同时成立。
+// 规则：
+//   · close 硬闸只拦对 owner 的 close 与 close --all；房客 close 是合法自清理；
+//   · 显式指定（--session/--profile/AGENT_BROWSER_SESSION/AGENT_BROWSER_GLOBAL_SESSION）优先；
+//   · profile：owner → profiles/main（登录态共享）；房客不注入；显式实例 → profiles/<名>；
+//   · 默认 headless（不抢前台焦点）：清 webdriver 指纹，UA 用正常 Chrome；
+//     ARGS 经逗号硬拆，含逗号的值（--window-position=x,y）不可经此传递；
+//   · 空闲回收：非房客显式设 IDLE_TIMEOUT_MS=0；房客属上游 user-attached browser，
+//     豁免空闲回收，只能靠显式 close 或孤儿兜底回收；
+//   · 每次非 close 调用刷新 <session>.last-used，供空闲租约回收器判断任务是否结束；
+//   · owner 状态异常（sock 在但端口不可发现/端口死）时自愈：清 stale 状态、结束孤儿 Chrome
+//     （严格按 user-data-dir 匹配）、重置 exit_type、清失效房客，再重新拉起 owner。
 //
-//   修复前:所有未显式指定 --session 的调用都坍缩到 shared 单例 + 单一 pinned tab —— 实测
-//   会话 A 开 example.com、会话 B 开 example.net 后,A 再读自己的页面拿到的是 example.net。
-//
-//   三个根因(前两个在本文件,第三个是上游语义):
-//     ① 房客(attach)门禁默认关闭,无显式指定时一律走宿主单例;
-//     ② 第 1) 段用"未显式指定就设 shared"覆盖了房客刚分配好的 session 名,使带 --cdp 的命令
-//        实际以 session=shared 发出 —— 这才是历史上"房客执行会杀死宿主 Chrome"的真因
-//        (shared 会话带 --cdp 指向自己的端口 → 宿主 daemon 连自己 → 重启自己);
-//     ③ 上游 0.34.0 起提供 --pin-tab 持久绑定,但浏览器 owner session 自身(即启动 Chrome
-//        的那个 session)不享受该保护:它的活动 tab 仍跟随全局活动 tab,房客一 open 新 tab,
-//        owner 再 eval 就读到房客的页面(shared.target 文件没变,eval 结果已漂移 —— 受控实测)。
-//
-//   修复方案(适配上游语义,而非对抗它):
-//     · shared session 降级为纯浏览器 owner —— 只负责持有 Chrome,永不承载用户命令;
-//     · 每个 DSH 会话一律以 pinned 房客身份运行:独立 session 名 + --cdp owner端口 +
-//       --pin-tab,且每一次调用都重复注入(--cdp 不是 sticky,漏传一次就掉回 owner 并顶掉别人);
-//     · 冷启动时先拉起 owner 浏览器,再用房客身份执行本次命令 —— 否则本次 open 会落在 owner 上,
-//       下一次调用变成房客时看不到该页面(首次调用结果丢失)。
-//
-//   实测(owner + 3 房客 × 3~5 轮交错 open/eval):
-//     · 房客之间 5/5 稳定,每会话恒定看到自己的页面;localStorage 互不串(跨进程验证);
-//     · owner Chrome 全程存活(daemon pid 不变),不再出现"房客杀死宿主"。
-//
-// 功能清单:
-//   0) close 硬闸:仅拦显式 shared 与 --all(owner 不能被误关);房客 close 放行;
-//   0.5) 宿主-房客:shared = owner(profiles/main 常驻);每个 DSH 会话 = 独立 pinned 房客;
-//   1) 显式指定(--session/--profile/AGENT_BROWSER_SESSION/AGENT_BROWSER_GLOBAL_SESSION)一律优先 ——
-//      跑批/独立实例的逃生门(自带独立 profile,不受房客逻辑影响);
-//   2) profile:owner → profiles/main(登录态共享);房客不注入(登录态在 owner Chrome 内);
-//      显式独立 session → profiles/名;
-//   3) 静默运行:默认 headless(唯一不抢前台焦点的模式),AutomationControlled 清 webdriver,
-//      并用官方 AGENT_BROWSER_USER_AGENT 覆盖为正常 Chrome UA(消 HeadlessChrome 指纹);
-//      注:ARGS 经 agent-browser 按逗号硬拆,含逗号的值(如 --window-position=x,y)不可经此传递,
-//      残尾数字会被 Chrome 当整数 IP URL(http://0.0.3.32/ = 800,2026-10-15 实测);
-//   4) 空闲回收:仅非房客禁用(IDLE_TIMEOUT_MS=0)。房客走 --cdp attach,属上游"user-attached
-//      browsers",豁免空闲回收——实测永不自退(2026-10-16:manual-* daemon 存活 3h+ 仍健在)。
-//      因此房客标签只能靠显式 close(先摘标签)或下方孤儿 tab 兜底清理回收,
-//      绝不能指望 daemon 自退;本注释 2026-10-16 修正,旧文"房客 daemon 1h 自退"与实现不符;
-//   5) owner 状态异常(sock 在但端口不可发现/端口死)→ 自愈:清 stale 状态、结束孤儿 Chrome
-//      (严格按 user-data-dir 匹配)、重置 exit_type 防崩溃恢复、清失效房客,再重新拉起 owner。
-// 排障:AGENT_BROWSER_WRAPPER_DEBUG=1 打印决策。
-// 回退旧的 shared 单例行为:AGENT_BROWSER_GUEST_MODE=0
-// 详细规程与实测结论:~/.agents/skills/browser-automation-safety/SKILL.md
+// 调试：AGENT_BROWSER_WRAPPER_DEBUG=1 打印决策；AGENT_BROWSER_GUEST_MODE=0 回退 shared 单例。
+// 规程与排障：~/.agents/skills/browser-automation-safety/SKILL.md
 
 import { statSync } from "node:fs";
 import { createHash } from "node:crypto";
 const sockExists = (p: string) => { try { return statSync(p).isSocket(); } catch { return false; } };
 const HOME = process.env.HOME ?? "";
 const REAL = HOME + "/.bun/install/global/node_modules/agent-browser/bin/agent-browser.js";
-// 2026-10-21 修复(根因): REAL 的 shebang 是 #!/usr/bin/env node,而本机 node 由 nvm 管理
+// 修复(根因): REAL 的 shebang 是 #!/usr/bin/env node,而本机 node 由 nvm 管理
 // (/Users/liyou/.nvm/versions/node/vX/bin/node),不在默认 PATH。直接 exec REAL 会报
 // env: node: No such file or directory (exit 127) -> wrapper 全部命令失效,且冷启动时
 // bootstrapOwner 静默失败后每条命令空等 waitForPort 的 20 秒超时。
@@ -102,7 +75,7 @@ if (hasSessionFlag) {
   effSession = process.env.AGENT_BROWSER_GLOBAL_SESSION ?? "shared";
 }
 
-// ---------- 孤儿 daemon 清理(2026-10-15 实测:多代 daemon 互相抢着重启 Chrome 的根源) ----------
+// ---------- 孤儿 daemon 清理：多代 daemon 会互相抢着重启 Chrome ----------
 // sock 已不存在却仍存活的 daemon = 失控前代,其守护逻辑会不断重启 Chrome。连续两次检测均无
 // sock 才杀(避免误杀刚启动尚未绑 sock 的新 daemon)。
 const cleanOrphanDaemons = async () => {
@@ -137,7 +110,7 @@ const killAllDaemons = () => {
 
 await cleanOrphanDaemons();
 
-// ---------- Chrome Dock 守卫(2026-10-20) ----------
+// ---------- Chrome Dock 守卫 ----------
 // 背景:agent-browser 用 /Applications/Google Chrome.app 的真实二进制起 headless(刻意如此:
 // UA/指纹/登录态与日常 Chrome 一致,反爬站点不拒绝)。但 macOS LaunchServices 按
 // CFBundleIdentifier 判定「该 app 是否在运行」,与 profile 无关 —— 若用户没有 GUI 实例,
@@ -151,8 +124,8 @@ try {
 } catch {}
 
 // 兜底清理:清掉"已死房客"留下的状态文件。
-// 2026-10-15 实测发现:房客 daemon 自行退出(空闲 1h 回收/kill)时不会带走 .target/.config,
-// 且部分关闭路径早于本轮修复 → 实测累积了 28 组孤儿文件(有 .target 无 .sock)。
+// 实测发现:房客 daemon 自行退出(空闲 1h 回收/kill)时不会带走 .target/.config,
+// 若关闭路径未清理状态,会累积只有 .target/.config 而没有 .sock 的孤儿文件。
 // 判据严格限定为"既无活跃 socket、进程也不存活",避免误删正在工作的会话。
 const purgeDeadSessionState = () => {
   try {
@@ -160,7 +133,7 @@ const purgeDeadSessionState = () => {
     const path0 = require("node:path");
     const names = new Set<string>();
     for (const f of fs.readdirSync(AB_HOME)) {
-      // 2026-10-16 修正:不再限定 dsh-/manual- 前缀 —— 实测 explicit session(如 hotspot-qa/ui-dark)
+      // 修正:不再限定 dsh-/manual- 前缀 —— 实测 explicit session(如 hotspot-qa/ui-dark)
       // 残留的 26 组状态文件因前缀不匹配而永不清理。凡"会话名.状态扩展名"都纳入。
       const m = /^([^.]+)\.(?:target|config)$/.exec(f);
       if (m) names.add(m[1]);
@@ -170,11 +143,11 @@ const purgeDeadSessionState = () => {
       let pid = "";
       try { pid = fs.readFileSync(AB_HOME + "/" + n + ".pid", "utf8").trim(); } catch {}
       if (pid && run(["kill", "-0", pid]).exitCode === 0) continue; // 进程还活着,别动
-      // 2026-10-16 修正:死 daemon 会留下陈旧 .sock —— 旧逻辑"sockExists 即跳过"会被
+      // 修正:死 daemon 会留下陈旧 .sock —— 旧逻辑"sockExists 即跳过"会被
       // 这具陈旧 sock 永久短路(26 组死会话残留的真因)。判活以 .pid 为准:
       //   .pid 存在且进程死  → sock 一定是陈旧的,连同状态文件一起删;
       //   .pid 缺失(无法判死) → 保守起见维持旧行为,只删非 sock 状态文件。
-      // 2026-10-28 修复跨代竞态:同名会话重建时 .pid 仍指向上一代(已死),磁盘 sock 却
+      // 修复跨代竞态:同名会话重建时 .pid 仍指向上一代(已死),磁盘 sock 却
       // 已被新一代 daemon 重新 bind(.pid 写回晚于 bind),旧逻辑会删掉活 daemon 的 sock
       // 使其永久失联(实测 cnm-e2e 由此泄漏 3 套 daemon+Chrome)。删 sock 前核实磁盘路径
       // 的真实持有者:有存活的 agent-browser 进程持有 → 是活 daemon,整组跳过。
@@ -185,7 +158,7 @@ const purgeDeadSessionState = () => {
         const liveDaemon = holders.find((h) => /agent-browser/.test(run(["ps", "-o", "command=", "-p", h]).stdout.toString()));
         if (liveDaemon) {
           // 不止跳过,还要治愈:上游真身的 session list 等命令按「.pid 已死」prune 整个会话
-          // (连活 sock 一起删 —— 2026-10-28 对照实验证实:死 .pid 组 6 文件全清、活 daemon 断联),
+          // (连活 sock 一起删 —— 对照实验证实:死 .pid 组 6 文件全清、活 daemon 断联),
           // 故必须把真实持有者写回 .pid,消除上游可见的不一致。
           try { fs.writeFileSync(AB_HOME + "/" + n + ".pid", String(liveDaemon) + "\n"); } catch {}
           debug(".pid 落后于新一代,已治愈为实际持有者 " + liveDaemon + ":" + n);
@@ -194,16 +167,16 @@ const purgeDeadSessionState = () => {
       }
       if (sockStale) rmFile(sockPath);
       if (!sockExists(AB_HOME + "/" + n + ".sock")) {
-        for (const ext of ["target", "config", "pid", "stream", "version", "engine"]) rmFile(AB_HOME + "/" + n + "." + ext);
+        for (const ext of ["target", "config", "pid", "stream", "version", "engine", "last-used"]) rmFile(AB_HOME + "/" + n + "." + ext);
         debug("清理已死会话的残留状态:" + n + (sockStale ? "(含陈旧 sock)" : ""));
       }
     }
   } catch {}
 };
-// 2026-10-16 修复:集成孤儿 tab 清理时误删了本调用行,导致 purge 长期未执行(26 组死会话残留)。
+// 修复:集成孤儿 tab 清理时误删了本调用行,导致 purge 长期未执行(26 组死会话残留)。
 purgeDeadSessionState();
 
-// ---------- 孤儿 daemon+Chrome 收割(2026-10-27) ----------
+// ---------- 孤儿 daemon+Chrome 收割 ----------
 // 背景:显式 --session 独立实例(自带 headless Chrome + 临时 profile)的宿主脚本被
 // SIGINT/SIGTERM/SIGKILL 打断、或 close 失败被 "|| true" 吞掉时,daemon 与 Chrome 都不会
 // 自退(attach 型 daemon 豁免空闲回收),实测一夜累积 8 组孤儿 ≈112% CPU + 5.2GB 内存。
@@ -233,9 +206,9 @@ const reapOrphanDaemons = () => {
 };
 reapOrphanDaemons();
 
-// ---------- 孤儿 tab 兜底清理(2026-10-16) ----------
+// ---------- 孤儿 tab 兜底清理 ----------
 // 房客 daemon 走 --cdp attach 豁免空闲回收(见功能清单 4,实测永不自退),标签只能靠显式 close
-// 回收;而会话结束无人 close → 标签只增不减(2026-10-16 实测一夜 37 个,16 个 about:blank;
+// 回收;而会话结束无人 close → 标签只增不减( 实测一夜 37 个,16 个 about:blank;
 // 根因还包括 manual-<ppid> 兜底让"无 DSH_SESSION_ID 的调用"每次都是新会话)。
 // 这里每至多 1h 派发一次独立清理进程(分离、不阻塞、失败静默):只关 about:blank 与
 // 无对话内容的 gemini 新对话页 —— 此类标签即使属于活会话,关掉也无损失(下次调用按
@@ -262,7 +235,7 @@ const reapOrphanTabs = (protectSessions: string[]) => {
 };
 
 // ---------- 静默运行:不抢焦点(先算好:owner 冷启动与正式执行共用) ----------
-// 2026-10-15 实测结论(独立实例受控对照,前台应用用 lsappinfo front 判定):
+// 实测结论(独立实例受控对照,前台应用用 lsappinfo front 判定):
 //   · headed:浏览器一启动就抢走前台焦点,用户"干啥都会被切到自动化窗口";把窗口移到屏幕外
 //     (--window-position=-32000,-32000)、--start-minimized、或启动后用 CDP
 //     Browser.setWindowBounds 搬走窗口,全都**不能**避免 —— 焦点已在启动瞬间丢失。
@@ -371,7 +344,7 @@ const purgeGuestState = (killDaemons: boolean) => {
 // 冷启动:以 shared 身份拉起 owner 浏览器(此后 shared 只持有 Chrome,不承载用户命令)
 const bootstrapOwner = () => {
   debug("冷启动:以 shared owner 启动 Chrome");
-  // owner 重新拉起 = 旧 Chrome 已消失,旧房客绑定全部作废,先清干净再起
+  // owner 重新拉起 = 旧 Chrome 已消失,旧房客绑定全部失效,先清干净再起
   purgeGuestState(true);
   const bootEnv = childEnv();
   if (!bootEnv.AGENT_BROWSER_IDLE_TIMEOUT_MS) bootEnv.AGENT_BROWSER_IDLE_TIMEOUT_MS = "0";
@@ -397,10 +370,9 @@ if (explicit) {
     // 实测教训:末 8 字符会碰撞(如 postheal-...aaaa 与 soakaaaa-...aaaa 都得到 dsh-0000aaaa),
     // 两个不同会话共用一个 session → 绑定互相覆盖并报 tab_gone。哈希取 8 位六十四进制,冲突概率可忽略。
     const dsh = process.env.DSH_SESSION_ID ?? "";
-    // 2026-10-16 修正:无 DSH_SESSION_ID 的兜底名,旧版用 manual-<ppid%1e6> —— 而 agent 环境里
-    // 每条命令的父进程都不同,等于"每次调用一个新会话":实测 fft_cover 一处自动化半天累积
-    // 55 个会话(55 个 daemon + 55 个标签,几乎全是 about:blank)。daemon 又豁免空闲回收永不
-    // 自退,只能靠 reaper 兜底。现改为对【调用方工作目录】取哈希:同一项目目录复用同一房客,
+    // 无 DSH_SESSION_ID 时的兜底会话名按【调用方工作目录】取哈希:agent 环境下每条命令的
+    // 父进程都不同,用 ppid 会退化成"每次调用一个新会话";按目录取哈希可让同一项目目录复用
+    // 同一房客,天然满足一个会话一个标签;不同项目目录之间依旧隔离。
     // 天然满足"一个会话一个标签";不同项目目录之间依旧隔离。
     // 代价:同目录下并发跑两个自动化会共用同一个标签(与上游 default 单例等价,且严格更优);
     // 需要并发的场景请显式传 --session(该路径优先级最高,不受此兜底影响)。
@@ -443,7 +415,7 @@ if (subcmd === "close") {
 }
 
 // ---------- 会话关闭时的标签与状态清理 ----------
-// 实测缺陷(2026-10-15):显式 `--session <房客名> close` 只退 daemon,既不关它在 owner Chrome 里
+// 关闭缺陷:显式 `--session <房客名> close` 只退 daemon,既不关它在 owner Chrome 里
 // 的 pinned tab,也不清残留状态文件(.target/.config)→ 标签泄漏。此处统一处理:
 // 无论"隐式房客(本会话)"还是"显式指定的房客",关闭前都先摘掉它的标签,关闭后清净状态文件。
 const sessionTarget = async (name: string): Promise<{ targetId?: string; url?: string }> => {
@@ -485,7 +457,7 @@ if (closeSessionName) {
 // ---------- 2) profile:owner → main;显式独立 session → 同名独立 profile;房客不注入 ----------
 if (!hasProfileFlag && !process.env.AGENT_BROWSER_PROFILE && !guest && !explicit) {
   // 房客(attach 模式)不注入 profile:登录态在 owner Chrome 内,本地 profile 仅是 spawn 参数;
-  // 带上它会让房客 daemon 的 respawn 按 profile 抢占 owner Chrome(2026-10-15 实测)。
+  // 带上它会让房客 daemon 的 respawn 按 profile 抢占 owner Chrome( 实测)。
   const prof = effSession && effSession !== "shared" ? AB_HOME + "/profiles/" + effSession : OWNER_PROFILE;
   inject.push("--profile", prof);
 }
@@ -498,7 +470,7 @@ if (!guest && effectiveName === "shared" && !argv.some((a) => a === "--pin-tab" 
   inject.push("--pin-tab");
 }
 
-// ---------- 3.5) 空闲回收:仅非房客禁用(房客 attach 豁免空闲回收,实测永不自退 —— 2026-10-16 修正,旧文"1h 自退"作废) ----------
+// ---------- 3.5) 空闲回收:非房客禁用(IDLE_TIMEOUT_MS=0);房客 attach 豁免空闲回收,不会自退 ----------
 if (!guest) {
   const hasIdle = argv.some((a) => a === "--idle-timeout" || a.startsWith("--idle-timeout="));
   if (!hasIdle && !process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS) injectEnv.AGENT_BROWSER_IDLE_TIMEOUT_MS = "0";
@@ -522,6 +494,20 @@ try {
 
 const finalSession = injectEnv.AGENT_BROWSER_SESSION ?? process.env.AGENT_BROWSER_SESSION ?? "";
 debug("最终执行:session=" + finalSession + " guest=" + guest + " args=" + JSON.stringify([...inject, ...argv]));
+
+// ---------- 空闲租约时间戳:任务结束即回收 ----------
+// 目的:agent 主动 close 是主路径;但 abort/报错/忘记 close 时需要一个机械兜底。
+// wrapper 每次非 close 调用刷新 <session>.last-used,由公共租约收割器 ab-reap-idle.mjs
+// 依据它判断「该会话已 X 分钟没有任何浏览器命令」→ 自动 close(房客摘标签;独立实例退 Chrome)。
+// 不能依赖上游空闲回收:房客走 --cdp attach 属 user-attached browser(永不空闲关闭),
+// 独立实例又被本文件 3.5) 显式设了 IDLE_TIMEOUT_MS=0,故必须在 wrapper 层留活动时间戳。
+// 名称解析:优先 effectiveName(injectEnv/env/--session)。--session 显式路径下 finalSession
+// 为空,必须用 effectiveName;--profile 单独指定时上游会话名是 default,写 default.last-used。
+let leaseName = effectiveName;
+if (!hasSessionFlag && !process.env.AGENT_BROWSER_SESSION && !process.env.AGENT_BROWSER_GLOBAL_SESSION && hasProfileFlag) leaseName = "default";
+if (subcmd !== "close" && leaseName && leaseName !== "shared") {
+  try { await Bun.write(AB_HOME + "/" + leaseName + ".last-used", String(Date.now())); } catch {}
+}
 
 // stdout 一律 inherit:直接把子进程输出交给原终端,不做缓冲/转发 ——
 // 避免改变上游对 TTY 的判断(格式化输出如 open/snapshot 会因管道而变化)。

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 孤儿 tab 兜底清理 —— 由 agent-browser wrapper 每至多 1h 派发一次(节流在 wrapper 侧),也可手动跑。
 //
-// 背景(2026-10-16 实测):房客 daemon 走 --cdp attach,属上游"user-attached browsers",豁免空闲回收,
+// 背景:房客 daemon 走 --cdp attach,属上游"user-attached browsers",豁免空闲回收,
 // 永不自退;而"无 DSH_SESSION_ID 的调用"每次都会生成新访客(wrapper 的 manual-<ppid> 兜底),
 // 每个新访客开一个新标签,又没人 close → 一夜累积 37 个标签(16 个 about:blank)。
 //
@@ -11,7 +11,7 @@
 // 有标题/带对话路径的 Gemini 页面绝不碰;owner(shared)的占位标签不碰。
 // 保护"调用者自己":wrapper 派发时经 AB_REAP_PROTECT_SESSIONS 传入生效会话名
 //   (手动直跑时读 AGENT_BROWSER_SESSION;都没有则无自我保护 —— 别在会话中途手动裸跑)。
-// 即使误关了活会话的标签也无损失:其下次调用会按 tab_gone 自动重绑(wrapper 内建自愈,已实测)。
+// 即使误关了活会话的标签也无损失:其下次调用会按 tab_gone 自动重绑(wrapper 内建自愈)。
 //
 // 用法: node ab-reap-tabs.mjs [--dry-run]
 import { spawnSync } from "node:child_process";
@@ -23,7 +23,7 @@ const DRY = process.argv.includes("--dry-run");
 const AB = process.env.AGENT_BROWSER_HOME ?? join(homedir(), ".agent-browser");
 const DEADLINE = Date.now() + 10_000; // 整体硬超时:清理绝不能拖垮任何调用方
 
-// 二进制解析:PATH 里有 agent-browser 就用;否则回退 wrapper 绝对路径(2026-10-27 补:
+// 二进制解析:PATH 里有 agent-browser 就用;否则回退 wrapper 绝对路径( 补:
 // DSH 派发环境 PATH 可能缺 ~/.local/bin,裸命令名会 ENOENT → 静默 no-op,清理永远不生效)。
 const AB_BIN_CANDS = [process.env.AB_BIN ?? "", join(homedir(), ".local/bin/agent-browser")].filter(Boolean);
 const get = (cmd) => {

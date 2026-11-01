@@ -1,0 +1,18 @@
+#!/bin/sh
+# ~/.agents 提交闸门：文档写法（日期 / 变更史 / 踩坑记录式章节）+ frontmatter 错误一律拒收。
+# 由 git -C ~/.agents config core.hooksPath .githooks 启用；绕过需 --no-verify（不推荐）。
+set -u
+lint="$HOME/.agents/bin/skill-lint"
+{
+  out=$("$lint" 2>&1)
+} || {
+  printf '%s\n' "$out" | grep -E '^ERROR' >&2
+  cat >&2 <<'MSG'
+skill-lint 未通过：文档里出现日期/变更史类内容或 frontmatter 错误，已阻止提交。
+修复办法：skill-lint 查看全文；删除日期、变更记录/更新日志/时间线/踩坑记录类章节，
+把「已作废/修复前/旧文」等改写为现状表述（写法规范见 knowledge-maintenance skill）。
+MSG
+  exit 1
+}
+exit 0
+

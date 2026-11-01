@@ -1,5 +1,5 @@
 #!/bin/bash
-# chrome-guard —— 保证 headless 自动化不抢占用户日常 Chrome 的 Dock 身份（2026-10-20/24）
+# chrome-guard —— 保证 headless 自动化不抢占用户日常 Chrome 的 Dock 身份
 #
 # 背景：agent-browser 与自研脚本默认用 /Applications/Google Chrome.app 的真实二进制启动
 # headless 实例（刻意如此：UA/指纹/登录态与日常 Chrome 完全一致，反爬站点不会拒绝）。
@@ -7,7 +7,7 @@
 # user-data-dir 无关**——任何用同一 Chrome.app 起的 headless 实例，都会被登记成
 # com.google.Chrome 的一个实例。
 #
-# 故障现象（2026-10-20 实测复现）：当用户没有 GUI 实例、只有 headless 占着 bundle id 时，
+# 故障现象（ 实测复现）：当用户没有 GUI 实例、只有 headless 占着 bundle id 时，
 # 点 Dock 图标 / 右键"新建窗口" / open -a "Google Chrome" 全部去"激活"那个无窗口的
 # BackgroundOnly 实例 → 什么都不发生，用户无法使用 Chrome。
 #
@@ -44,7 +44,7 @@ log() { [ "$QUIET" = "1" ] || echo "[chrome-guard] $*" >&2; }
 # 只判 type 会被骗过 —— 必须同时要求 flavor=3（正常 app；headless 是 flavor=2）。
 # 用 lsappinfo 而非 ps —— 沙盒会话常禁 ps（/bin/ps: Operation not permitted）。
 has_gui_instance() {
-  # 2026-10-22 修复(抢焦点根因①): lsappinfo list 的行首带前导空格（实测形如 ' 9) "Google Chrome"'），
+  # 修复(抢焦点根因①): lsappinfo list 的行首带前导空格（实测形如 ' 9) "Google Chrome"'），
   # 原正则 /^[0-9]+\) .../ 要求序号紧贴行首 → 永远不命中 → inblock 恒为 0 → found 恒为空
   # → 恒判「无 GUI 实例」→ 每次调用都对已在运行的 Chrome 执行 open → 激活窗口、抢走焦点。
   # 必须允许前导空白。
@@ -74,7 +74,7 @@ is_chrome_proc() {
 }
 
 # 兜底判据：profile 被**存活的 Google Chrome 进程**持有。
-# 2026-10-24 修正(关键):
+# 修正(关键):
 # 仅 kill -0 $pid 会误判！macOS PID 会回绕复用（如 PID 530 被系统服务 suggestd 复用）。
 # 必须同时校验：
 # 1. pid 是有效数字且进程存活
@@ -123,7 +123,7 @@ if has_profile_lock; then
     log "GUI 实例已就绪"
     exit 0
   fi
-  # 2026-10-22 修复(抢焦点根因② 安全阀): profile 被 SingletonLock 锁定 = 用户 GUI Chrome 正在运行
+  # 修复(抢焦点根因② 安全阀): profile 被 SingletonLock 锁定 = 用户 GUI Chrome 正在运行
   # （Chrome 退出时无论正常与否都会清掉该锁）。此时检测不到 Foreground 只可能是注册延迟或口径
   # 不一致，**不能**再对已运行的 Chrome 执行 open —— open 会激活它的窗口、把用户从前台应用切走。
   log "profile 已锁定但检测不到 Foreground 条目，判定为注册延迟/口径差异；为避免抢焦点，不执行 open"
