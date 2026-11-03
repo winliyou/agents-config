@@ -13,7 +13,7 @@ description: 移动端与 TV 端 UI 通用约定（跨 ArkUI / Compose / Android
 ## 1. 可操作面积不能小于触控下限
 
 - 可聚焦/可点击控件（按钮、chip、图标按钮、列表行）必须保证足够热区，**用约束最小尺寸而非固定高度**，避免被父布局压缩：
-  - ArkUI：`constraintSize({ minHeight })`，图标按钮用 padding 补足；热区下限取 ≥44vp（本机项目基线；「官方 40vp/推荐 46」在本地文档中未找到依据，不作为硬口径）；Android/Compose 侧常用 48dp 下限
+  - ArkUI：`constraintSize({ minHeight })`，图标按钮用 padding 补足；热区下限取 ≥44vp（本机项目基线），Android/Compose 侧常用 48dp 下限
   - Compose/TV：`requiredHeight` / `requiredSize`（`required*` 不被父级压缩），**不要**用普通 `height` / `size`
 - 图标按钮尤其容易踩：视觉尺寸可以小，但**热区必须补够**。
 
@@ -57,16 +57,10 @@ description: 移动端与 TV 端 UI 通用约定（跨 ArkUI / Compose / Android
 
 ## 8. 跨端通用：窄视口卡片文本逐字竖排（Web/CSS）
 
-> 本节虽是 Web/CSS 案例，但坑位在「窄视口（手机真机尺寸）」才暴露，故暂寄本 skill；纯 Web 项目读到此节同样适用。
+> 本节虽是 Web/CSS 案例，但坑位只在窄视口（手机真机尺寸）暴露；纯 Web 项目同样适用。
 
-- 现象：桌面正常的横排中文卡片，在 390px 真机尺寸下逐字竖排；排查时 DevTools
-  计算值全正常（flex/padding/换行属性无一异常），属隐蔽布局债。
-- 根因（两条，独立叠加）：
-  1. 一条高特异度通配按钮规则（如 `.panel button`）覆盖了卡片自身的 padding，
-     把卡片内容压到十几 px 宽，CJK 逐字断行（ASCII 无断点则整段溢出——两者并存
-     即确诊）；桌面靠卡片宽度遮羞，窄屏全碎。解法：通配规则收敛到直接子级
-     （如 `.panel > button`），嵌套按钮组各自写全样式。
-  2. 容器偏窄时 flex-shrink 把卡片压到 CJK min-content（≈单字宽）才换行——换行
-     永远等不到。解法：卡片 `flex-shrink: 0`（窄屏换行而非压字）或显式 min-width。
-- 验证：真机尺寸 Playwright 截图 + 卡片高度断言（坏味道：卡高数倍于正常）；
-  注意 flex column 卡片高度阈值要留字体差异余量。
+- **判据**：桌面正常的横排中文卡片，在 390px 真机尺寸下逐字竖排；DevTools 计算值（flex/padding/换行属性）全正常，属隐蔽布局债。
+- **两个独立根因（可能叠加，同时存在即确诊）**：
+  1. 高特异度通配按钮规则（如 `.panel button`）覆盖了卡片自身的 padding，把卡片内容压到十几 px 宽，CJK 逐字断行（ASCII 无断点则整段溢出）；桌面靠卡片宽度遮羞，窄屏全碎。正确做法：通配规则收敛到直接子级（如 `.panel > button`），嵌套按钮组各自写全样式。
+  2. 容器偏窄时 flex-shrink 把卡片压到 CJK min-content（≈单字宽）才换行——换行永远等不到。正确做法：卡片 `flex-shrink: 0`（窄屏换行而非压字）或显式 min-width。
+- **验证**：真机尺寸 Playwright 截图 + 卡片高度断言（坏味道：卡高数倍于正常）；注意 flex column 卡片高度阈值要留字体差异余量。

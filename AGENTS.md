@@ -31,6 +31,7 @@
   - ④ 是**正当的常规路径，不是不得已的例外**：功能确实跑不通时不要卡死，请求授权即可；harness 会把请求作为审批呈现给用户，由用户决定。
   - 唯一禁止的是**自行放宽**：不得在未经用户授权的前提下关掉/放宽外层沙盒、给 home 加写权限、`chmod`/`chown` 等（`sandbox-adaptation` skill 的边界一节）。**「先问用户」与「自己绕开」是两回事——前者鼓励，后者禁止。**
 - **浏览器自动化清理（红线）**：任务收尾（给出最终答复前）必须立即 `agent-browser close`，**禁止把清理推给「会话结束」**（DSH 没有会话结束钩子；用户常在任务完成后直接开新会话/换新任务）；同一会话开始新任务前先确认无自己的残留。异常中断（abort/报错/关窗口）由空闲租约自动兜底（15 分钟，见 `browser-automation-safety` skill）——兜底不是豁免理由。
+- **长驻资源及时回收（红线）**：AI 或脚本触发的构建、工具不得留下常驻后台进程——Gradle 一律 `--no-daemon`（本机 `~/.gradle/gradle.properties` 已设 `org.gradle.daemon=false` 兜底），Kotlin 编译守护进程、dev server、watch 进程用完即 kill；任务/会话收尾前用 `pgrep -fl 'GradleDaemon|KotlinCompileDaemon'` 等复查并清理，需要时再启动，禁止空转占资源。
 
 ## 敏感凭据（红线）
 

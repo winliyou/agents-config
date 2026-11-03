@@ -10,7 +10,7 @@ description: 浏览器自动化安全约定与防弹窗红线（本机）：一�
 ## 工具选择：一律 agent-browser（硬红线）
 
 - **浏览器自动化与自动化测试必须走 `agent-browser`**，禁止自研脚本 / Playwright / 直接 spawn Chrome 或自写 CDP 脚本。三条理由：① 只有 wrapper 路径内置 `~/.agents/bin/chrome-guard`，防止 headless 实例独占 `com.google.Chrome` 的 LaunchServices 身份、导致用户点 Dock 没反应；② 劫持用户 Chrome 的 headless 实例**全部来自项目自研脚本**；③ wrapper 启动开销已足够低（冷启动 1.9s、热路径约 250ms），"太慢所以绕开"不成立。
-- **存量例外**：两仓库 E2E 仍用 Playwright（自带 Chromium、headless、未接日常 Chrome）——其一（游戏项目）**迁移进行中**：迁移分支 `fix/e2e-agent-browser` **已合入主干**，但迁移改动本身**尚未提交**，仍留在 `.worktrees/e2e-migration` 工作树里——46 个改动：删 `playwright.config.ts` + 20 个 `*.spec.ts`、改 `package.json`、`tests/e2e/` 已全换成 `.mjs`。判断迁移是否落地看主分支 `ls playwright.config.ts tests/e2e/*.spec.ts`，别看分支名；另一（运维门户）待迁移。判断「迁完了没」一律看主分支：`ls playwright.config.ts tests/e2e/*.spec.ts`，不要凭印象。**新项目/新套件一律直接用 agent-browser，不得新增 playwright/puppeteer 依赖**；迁移前风险可控（自带 Chromium 与日常 Chrome 的 bundle 身份无关），但**不得改用 `channel: "chrome"` 接系统 Chrome**。
+- **存量例外**：既有仓库的 E2E 若仍用 Playwright（自带 Chromium、headless、未接日常 Chrome），按现状保留、不强制迁移，但**不得改用 `channel: "chrome"` 接系统 Chrome**。**新项目/新套件一律直接用 agent-browser，不得新增 playwright/puppeteer 依赖**。存量是否迁完以仓库现状判定：`ls playwright.config.ts tests/e2e/*.spec.ts`（存在 = 未迁完），不要凭分支名或印象判断。
 - 本节约定与本机 `~/.agent-browser/config.json` 共同生效——**不要绕过配置文件去手写 env**。
 - **禁止自研 CDP 管线**（不 spawn Chrome、不管 CDP 端口/daemon/profile）；唯一允许的 CDP 补充场景（移动端视口模拟）与相关清单见 `references/wrapper-internals.md`。
 
@@ -95,7 +95,7 @@ agent-browser --auto-connect <命令>          # 等价：AGENT_BROWSER_CDP=9222
 - **首启竞态**：首次 `open` 后立即取标题可能为空（Chrome 首启慢），重试一次即可。
 - **残留 `SingletonLock`**（崩溃/被杀后报 `Failed to create .../SingletonLock: File exists`）：有两种极具误导性的表象——紧接的 snapshot/eval 全报 `CDP response channel closed`，或 `open` 仍打印标题+URL 造成成功假象。先删该 profile 下 `Singleton*`（或整个 profile）再重开。
 - **CLI 三条最高频坑**：`find` 的值位顺序是 `find <locator> <value> [action] --name <名>`（写成 `find role button "缩小" click` 会静默 no-op）；**取 ref 与点 ref 必须分两步**（复合命令里 `$(... | grep -oE '@e[0-9]+')` 常拿到空串）；session 名过长直接失败（socket 路径上限约 103 字节，用短前缀或 `AGENT_BROWSER_SOCKET_DIR`）。更多 CLI 与提权坑见 `references/wrapper-internals.md`。
-- **wrapper 不管道化 stdout**（大输出直通，实测 200KB eval 不截断）；仅在识别 `tab_gone` 时收集 stderr。
+- **wrapper 不管道化 stdout**（大输出直通，细节见 `references/wrapper-internals.md`）；仅在识别 `tab_gone` 时收集 stderr。
 - **代理**：本机已设 `no_proxy=localhost,127.0.0.1,::1`，直连本机 CDP 端口无需 `--noproxy`。
 
 ## 二进制与配置已全局固化
@@ -108,7 +108,7 @@ agent-browser --auto-connect <命令>          # 等价：AGENT_BROWSER_CDP=9222
 
 ## 清理义务（红线级：任务收尾即回收，不等会话结束）
 
-**公共层兜底不是豁免理由**，每个调用方都负有清理义务；**清理时机是「本任务/本脚本收尾」，不是「整个会话结束」**——DSH 没有会话结束钩子，用户也可能在任务完成后直接开新会话或换新任务，把清理推给会话结束 = 必然泄漏（典型规模：8 组实例跨会话/跨天残留，单实例最大 643MB + 23% CPU 常驻）。
+**公共层兜底不是豁免理由**，每个调用方都负有清理义务；**清理时机是「本任务/本脚本收尾」，不是「整个会话结束」**——DSH 没有会话结束钩子，用户也可能在任务完成后直接开新会话或换新任务，把清理推给会话结束 = 必然泄漏。判据：任务收尾后 `agent-browser session list` 只有受保护会话、`ps aux | grep -c 'Chrome for Testing'` 不超出活跃任务数；超出即按下方兜底清理。
 
 1. **任务收尾、给出最终答复前立即回收自己的会话**：房客直接 `agent-browser close`（无需参数，合法自清理）；独立实例用 `agent-browser --session <名> close`。跑批脚本必须在 `trap EXIT` 中关闭自身 session。**不要因为「可能还要用」而推迟**——重开是热路径（约 250ms），残留是几百 MB/天。
 2. **同一会话开始新任务前先确认无自己的残留**：`agent-browser session list` 只应剩 `shared`（owner）与其它会话的实例；发现自己上次的会话还开着就先 close。
@@ -118,7 +118,7 @@ agent-browser --auto-connect <命令>          # 等价：AGENT_BROWSER_CDP=9222
    ps aux | grep -c 'Chrome for Testing'         # 期望 0（无任务）或仅活跃任务数
    agent-browser tab list                        # 当前会话只留 1 个标签
    ```
-4. **多轮迭代循环（goal/ralph/逐轮验证）必须每轮结束回收本轮实例**：把 close 攒到任务最后一轮 = 轮间空档全是泄漏窗口（4 个实例仅推迟收尾即可持续 6 小时，叠加负载可把 8 核 16GB 整机压到 load 38、鼠标卡顿）。清理/删除类动作的前置守卫**核验到活进程/活引用时必须中止执行（exit 非零）**，不能打印警告后继续——否则会照样 rm，误删刚启动实例的临时 profile。
+4. **多轮迭代循环（goal/ralph/逐轮验证）必须每轮结束回收本轮实例**：把 close 攒到任务最后一轮 = 轮间空档全是泄漏窗口。清理/删除类动作的前置守卫**核验到活进程/活引用时必须中止执行（exit 非零）**，不能打印警告后继续——否则会照样 rm，误删刚启动实例的临时 profile。验证：每轮收尾后 `agent-browser session list` 只剩受保护会话。
 5. **产物不落公共目录**：截图/HAR/下载落项目工作区；落到 `~/.agent-browser/tmp/` 的由 reaper 按 7 天 TTL（`AB_TMP_TTL_DAYS`）清理，需保留的当场挪走。
 6. **持久 profile 不用了要删**：`~/.agent-browser/profiles/<用途>/`，删除前 tar 备份到 `~/.dsh/backups/`。
 7. **会话命名按任务独立**（`--session <名>-$$` 或项目固定名），禁止复用他人/他项目名字（跨项目固定名冲突会让两个任务共用同一实例、标签互抢）。
@@ -135,7 +135,7 @@ agent-browser --auto-connect <命令>          # 等价：AGENT_BROWSER_CDP=9222
 
 **公共层兜底**：wrapper 每次调用节流派发 `~/.agents/bin/ab-reap-orphans.mjs`（1h 至多一次），收割「sock 在 + daemon 活 + Chrome 用临时 profile」的孤儿，两段式标记 + 最小龄 600s。**手动收割前必须核实无活任务**，`--min-age 0` 不带保护名单曾误杀活跃会话。判据、边界与 reaper 盲区处置见 `references/orphan-reaper.md`。
 
-**规模基线**：8 组孤儿约 = 112% CPU + 5.2GB 内存占用。泄漏不值得，清理不麻烦。
+**清理判据**：任务收尾后 `agent-browser session list` 只剩 `shared` 与活跃任务；`ps aux | grep -c 'Chrome for Testing'` 或 headless 主进程数超出活跃任务数即存在孤儿，先用 `~/.agents/bin/ab-reap-orphans.mjs --dry-run` 确认再收割。
 
 ## 受限沙盒下执行（提权）
 
@@ -164,5 +164,5 @@ agent-browser --auto-connect <命令>          # 等价：AGENT_BROWSER_CDP=9222
 | `references/gemini-web-automation.md` | Gemini 网页自动化：日常 Chrome CDP 拖拽上传与单次握手纪律、模型/思考等级切换、图片上传四坑、提交与读取回答、重渲染复位、多图批量流水线 |
 | `references/dock-and-focus-guard.md` | Dock 身份劫持、chrome-guard 设计与判定正则、PID 回绕与 `open -n`、验证方法与可迁移规则 |
 | `references/wrapper-internals.md` | 复用机制细节、close 硬闸/静默注入/二进制固化细节、CLI 细节坑、受限沙盒提权、自研 CDP 管线边界、wrapper exit 127 根因 |
-| `references/orphan-reaper.md` | 会话/标签回收完整命令、孤儿 reaper 实现与边界、reaper 盲区处置、清理规模基线、空闲租约回收器 `ab-reap-idle` 与任务收尾即回收口径 |
+| `references/orphan-reaper.md` | 会话/标签回收完整命令、孤儿 reaper 实现与边界、reaper 盲区处置、清理判据、空闲租约回收器 `ab-reap-idle` 与任务收尾即回收口径 |
 | `references/headless-e2e.md` | headless 的 rAF/可见性修复、`eval` 单表达式限制、E2E 脚本 session 命名 |

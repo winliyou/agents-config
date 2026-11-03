@@ -7,12 +7,12 @@
 
 **清理红线**：打开的 Chrome 标签与会话只要不用就必须清理掉，不得留到任务结束。
 
-**泄漏规模**：一轮 a11y 矩阵审计跑批（多个 worker × 多次重跑）结束不清理，`agent-browser session list` 可残留 **8 个 `<项目前缀>-audit-*` 会话**，`ps aux | grep 'Chrome for Testing'` 达 **81 个进程**，且每个会话各带多个标签。
+**泄漏判据**：任务收尾后 `agent-browser session list` 出现非本任务会话、`ps aux | grep 'Chrome for Testing'`（或 headless 主进程数）超出活跃任务数，即为残留；每个残留会话还会各带多个标签。
 
 **硬规则**：
 
 1. **每个任务/脚本结束时必须回收自己的会话**：房客直接 `agent-browser close`；独立实例（`AGENT_BROWSER_GLOBAL_SESSION=<名>` / `--session <名>`）用 `agent-browser --session <名> close`。
-2. **跑批脚本必须在 trap EXIT 中关闭自身 session**（某项目 的 `scripts/browser-a11y.sh` / `browser-touch.sh` 已实现；新脚本照此模式），否则一次矩阵 6 组合 × 多次重跑会累积成几十个 Chrome。
+2. **跑批脚本必须在 trap EXIT 中关闭自身 session**，否则一次矩阵 6 组合 × 多次重跑会累积成几十个 Chrome。
 3. **人工任务收尾三连检查**（写进每轮工作流程）：
    ```bash
    agent-browser session list                  # 只应剩当前任务会话
@@ -38,7 +38,7 @@ ps aux | grep -c 'Chrome for Testing'            # 0
 ## 二、孤儿 daemon+Chrome 收割器（公共层兜底）
 
 
-**为什么需要**：显式 `--session` 独立实例（自带 headless Chrome + 临时 profile）的宿主脚本被 SIGINT/SIGTERM/SIGKILL 打断、或 `close` 失败被 `|| true` 吞掉时，daemon 与它拉起的 Chrome 都不会自退（attach 型 daemon 豁免空闲回收）。一夜可累积多组孤儿（峰值 8 组 ≈112% CPU + 5.2GB 内存，整机 load >15）。wrapper 的 `purgeDeadSessionState` 只清「进程已死」的残留状态文件，管不到「进程活着但宿主已消失」的实例——`~/.agents/bin/ab-reap-orphans.mjs` 补这一层，wrapper 每次调用自动节流派发（1h 至多一次，stamp `~/.agent-browser/.last-orphan-reap`）。
+**机制**：显式 `--session` 独立实例（自带 headless Chrome + 临时 profile）的宿主脚本被 SIGINT/SIGTERM/SIGKILL 打断、或 `close` 失败被 `|| true` 吞掉时，daemon 与它拉起的 Chrome 都不会自退（attach 型 daemon 豁免空闲回收）。wrapper 的 `purgeDeadSessionState` 只清「进程已死」的残留状态文件，管不到「进程活着但宿主已消失」的实例——`~/.agents/bin/ab-reap-orphans.mjs` 补这一层，wrapper 每次调用自动节流派发（1h 至多一次，stamp `~/.agent-browser/.last-orphan-reap`）。
 
 **判据与保障**：
 - **永不触碰**：`shared`（owner）、`dsh-*` / `manual-*`（房客，attach 模式不自带 Chrome）、`AB_REAP_PROTECT_SESSIONS` 额外名单（wrapper 注入调用方当前会话）、以及任何持 `profiles/main` Chrome 的会话。
@@ -53,7 +53,7 @@ node ~/.agents/bin/ab-reap-orphans.mjs --dry-run    # 只评估不动手
 node ~/.agents/bin/ab-reap-orphans.mjs --min-age 0  # 立即收割当前确认孤儿（先核实无活任务再用）
 ```
 
-**端到端验证**：dry-run 正确列出 7 个孤儿（4 组带 chrome + 3 组 chrome-less 残留 daemon），保护名单零误报；`--min-age 0` 实跑全部收割，Chrome 主进程 5→1（仅剩 owner），4 个临时 profile 目录删除，shared / dsh-* / manual-* 全部完好；wrapper 冒烟（tab list）exit=0 且派发 stamp 正常刷新。
+**验收判据**：`--dry-run` 列出孤儿且保护名单零误报；`--min-age 0` 实跑后孤儿 daemon+Chrome+临时 profile 三者清零、`shared`/`dsh-*`/`manual-*` 完好；wrapper 冒烟（`agent-browser tab list`）exit=0 且派发 stamp 正常刷新。
 
 **可迁移规则**：
 - 脚本侧 `trap '... close ... || true' EXIT` 是单点：close 失败静默、SIGKILL 时 trap 不执行。生命周期清理必须有公共层兜底，不能依赖每个调用方都写对。
@@ -63,17 +63,17 @@ node ~/.agents/bin/ab-reap-orphans.mjs --min-age 0  # 立即收割当前确认�
 ## 三、reaper 盲区：状态文件被清的孤儿
 
 
-**盲区成因（两层叠加）**：① wrapper `purgeDeadSessionState` 以 `.pid` 文件判死删 sock，同名会话跨代重建时 `.pid` 落后于真实 sock 持有者 → 误删活 daemon 的 sock；② **上游真身二进制的 `session list` 等命令自带 prune**：见 `.pid` 为死 pid 即 prune 整个会话（对照实验：死 .pid 组 6 个状态文件连活 sock 全清、活 daemon 断联；正确 .pid 组完好）。被 prune 的实例「daemon 活着 + Chrome 活着 + 状态文件与 sock 全没了」，目录扫描看不见、任何客户端也无法再连 = 100% 孤儿。`cnm-e2e` 一个名字可泄漏 3 套 daemon+Chrome，`session list` 与 reaper 均不可见。
+**盲区成因（两层叠加）**：① wrapper `purgeDeadSessionState` 以 `.pid` 文件判死删 sock，同名会话跨代重建时 `.pid` 落后于真实 sock 持有者 → 误删活 daemon 的 sock；② **上游真身二进制的 `session list` 等命令自带 prune**：见 `.pid` 为死 pid 即 prune 整个会话。被 prune 的实例「daemon 活着 + Chrome 活着 + 状态文件与 sock 全没了」，目录扫描看不见、任何客户端也无法再连 = 100% 孤儿。判据：用下文「处置 2」的进程级扫描能发现这类实例，`session list` 与主路径 reaper 均不可见。
 
-**处置（`~/.agents/bin/ab-reap-orphans.mjs` + wrapper，端到端验证 PASS）**：
-1. **wrapper purge 判死前核实真实持有者**：`.pid` 死但 sock 存活时 `lsof -t <sock>` 找 holder，有存活的 agent-browser 进程 → **治愈**（把真实持有者写回 `.pid`，消除上游 prune 可见的不一致）并整组跳过；真正无主的陈旧 sock 照旧清理（反向对照 PASS）。
-2. **reaper 盲区扫描**：进程级发现——`pgrep` 全部 daemon × `lsof -p` 所持 sock × 磁盘路径已消失 → 孤儿候选，按 `<名>.<pid>` 粒度两段式标记（`MARK_DIR/blind/`），保护名单与 profiles/main 红线同主路径。复现失联态后 dry-run 正确发现、收割后 daemon+Chrome+临时 profile 三者全清。
+**处置（`~/.agents/bin/ab-reap-orphans.mjs` + wrapper；按下列规则实现，改完用 dry-run + 隔离态验证）**：
+1. **wrapper purge 判死前核实真实持有者**：`.pid` 死但 sock 存活时 `lsof -t <sock>` 找 holder，有存活的 agent-browser 进程 → **治愈**（把真实持有者写回 `.pid`，消除上游 prune 可见的不一致）并整组跳过；真正无主的陈旧 sock 照旧清理。
+2. **reaper 盲区扫描**：进程级发现——`pgrep` 全部 daemon × `lsof -p` 所持 sock × 磁盘路径已消失 → 孤儿候选，按 `<名>.<pid>` 粒度两段式标记（`MARK_DIR/blind/`），保护名单与 profiles/main 红线同主路径。验收：构造失联态后 dry-run 能发现，收割后 daemon+Chrome+临时 profile 三者全清。
 3. **dry-run 忠实模拟两段式**：无标记候选输出「将标记」而非「将收割」，不得把分钟级的活跃会话列进收割名单。
 4. **新鲜度护栏 `--fresh-secs`（默认 600s）**：daemon 启动未满龄的候选一律跳过。**红线：`--min-age 0` 必须带保护名单**——刚引导的会话是活任务在两条命令之间的空档，不是孤儿，不带保护名单实跑会误杀活跃会话（实测可一次误杀 5 个刚拉的会话）。手动实跑必须带 `AB_REAP_PROTECT_SESSIONS` 且先核对 daemon 启动时间。
 
 **其余仍需人工判断的边界**：`dsh-*`/`manual-*` 房客 daemon（attach 模式、无自带 Chrome）属 wrapper 保护类，即使宿主会话疑似已结束也不动手，报告即可；9h 无客户端的独立实例用 `agent-browser --session <名> close` 显式关（受 close 硬闸放行，daemon+Chrome+profile 三者全清）；**daemon TERM 会自行带走 Chrome 并删临时 profile 目录（约 2s）**，收割器无需再补杀。
 
-## 四、清理义务细则与规模基线
+## 四、清理义务细则与清理判据
 
 
 **公共层兜底（reaper）不是豁免理由**，每个调用方仍负有清理义务：
@@ -104,7 +104,7 @@ node ~/.agents/bin/ab-reap-orphans.mjs --min-age 0  # 立即收割当前确认�
    不能「打印警告后继续」——否则会打印 pgrep 命中清单却照样 rm，误删刚启动实例的临时 profile；
    且 close 扫描的同一分钟窗口内可能冒出新的临时实例，删目录前以「当下 pgrep 结果」为准，不以几分钟前的快照为准。
 
-**规模基线**：一夜可累积 8 组孤儿 ≈112% CPU + 5.2GB 内存占用。泄漏不值得，清理不麻烦。
+**清理判据**：任务收尾后 `agent-browser session list` 只剩受保护会话；孤儿 daemon/Chrome 用 `ps`（headless 主进程数）与 `~/.agents/bin/ab-reap-orphans.mjs --dry-run` 复核，超出活跃任务数即清理。
 
 ## 五、socket 目录重定向不在收割范围
 
@@ -112,10 +112,10 @@ node ~/.agents/bin/ab-reap-orphans.mjs --min-age 0  # 立即收割当前确认�
 
 ## 六、空闲租约回收器 ab-reap-idle（任务收尾即回收的机械兜底）
 
-**背景**：DSH 会话结束没有钩子；房客走 `--cdp` attach 属上游 user-attached browser，永不空闲关闭；独立实例又被 wrapper 显式设了 `AGENT_BROWSER_IDLE_TIMEOUT_MS=0`。因此「agent 主动 close」之外还需要一层不依赖会话结束、也不依赖后续有人再调浏览器的兜底——否则用户完成一个任务后直接开新会话，旧实例会残留到过夜（无兜底时 3 组独立实例可跨会话残留 10 小时，合计 781MB 内存 + 317MB 临时 profile）。
+**为什么需要**：DSH 会话结束没有钩子；房客走 `--cdp` attach 属上游 user-attached browser，永不空闲关闭；独立实例又被 wrapper 显式设了 `AGENT_BROWSER_IDLE_TIMEOUT_MS=0`。因此「agent 主动 close」之外还需要一层不依赖会话结束、也不依赖后续有人再调浏览器的兜底，否则任务完成直接开新会话时旧实例会残留过夜。
 
 **机制**：
-- wrapper 每次**非 close** 调用刷新 `~/.agent-browser/<session>.last-used`（==`<名>.last-used`== 随后续 close 一并清除）；
+- wrapper 每次**非 close** 调用刷新 `~/.agent-browser/<session>.last-used`（即 `<名>.last-used`，随后续 close 一并清除）；
 - launchd 任务 `com.chaoset.ab-idle-reaper`（`~/Library/LaunchAgents/`，StartInterval 300s）运行 `~/.agents/bin/ab-reap-idle.mjs`：对「sock 在 + daemon 活 + 无 CLI 客户端 + last-used 距现在 ≥ 阈值」的**非 owner** 会话执行 `agent-browser --session <名> close`——房客先摘自己的 pinned tab 再退 daemon；独立实例连自带 Chrome 与临时 profile 一起回收；`shared` 永不碰。
 - 阈值：`AB_IDLE_CLOSE_MS` 默认 900000（15 分钟）；`AB_IDLE_MIN_AGE_MS` 默认 120000（会话存在不足 2 分钟不碰）。手动检查：`node ~/.agents/bin/ab-reap-idle.mjs --dry-run -v`；立即回收：`AB_IDLE_MIN_AGE_MS=0 node ~/.agents/bin/ab-reap-idle.mjs`（先确认无活任务）。
 - 状态：每次真实运行写 `~/.agent-browser/.last-idle-reap`；动作日志 `~/.agent-browser/idle-reaper.log`（launchd 落盘）。

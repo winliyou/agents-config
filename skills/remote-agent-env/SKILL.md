@@ -109,7 +109,7 @@ ssh "$REMOTE" 'cd ~/.local/share/dsh-cli && node -e "const pty=require(\"node-pt
 
 - **npm 12 的 allowScripts 拦截**：不审批时 node-pty/koffi 等的 install script 会被跳过——实测 dsh web 仍能启动，
   但原生功能有风险，不要依赖这种状态；按上面显式审批 + rebuild 才是可复现的安装。
-- 安装耗时可达数分钟（实测一次 6m09s / 616 packages），不要过早判定卡死；重装前可先看 npm 是否在下载。
+- 首次安装为数百包、近 1GB，可能耗时数分钟，不要过早判定卡死；判活看 npm 是否仍在下载（`ps`/网络流量），重装前先确认。
 - 远端真实入口是 `~/.local/share/dsh-cli/node_modules/.bin/dsh`（`~/.local/bin/dsh` 指向它）。
 - **`~/.local/bin` 不在非交互 ssh 的默认 PATH 里**（ssh 执行命令不 source `~/.zshrc`）：
   `command -v dsh` 为空不代表没装，用绝对路径校验；systemd unit 必须显式 `Environment=PATH=...`。
@@ -254,9 +254,10 @@ DSH 默认用户级发现根（skill-filesystem provider 的 rank 顺序）：
 项目级还有 `<projectRoot>/.dsh/skills`（100）与 `<projectRoot>/.agents/skills`（200）。
 用户全局指令链：`$DSH_HOME/AGENTS.md` → `<agentsHome>/AGENTS.md`（即 `~/.agents/AGENTS.md`）。
 
-**推荐布局**：通用指令放 `~/.agents/AGENTS.md`（随 agents 配置仓库走、可复用），**主机差异**（路径/工具/端口/服务拓扑）
+**推荐布局（远端主机）**：通用指令放 `~/.agents/AGENTS.md`（随 agents 配置仓库走、可复用），**主机差异**（路径/工具/端口/服务拓扑）
 放 `~/.dsh/AGENTS.md`；两个根都会加载、内容相同会去重，但分开放可以避免每换一台主机就改通用指令。
 `~/AGENTS.md` 通常是 `~/.agents/AGENTS.md` 的符号链接（沿用本机约定即可）。
+> 本机 macOS 的 `~/.dsh/AGENTS.md` 经 `~/AGENTS.md` 软链到 `~/.agents/AGENTS.md`，**不要在该路径写主机差异**（见 `workspace-and-shell`）；远端主机该文件才是独立文件。
 
 同步（**macOS 默认方案是 tar 管道**，见下节 rsync 坑）：
 
@@ -302,7 +303,7 @@ ssh "$REMOTE" 'chmod +x ~/.agents/bin/skill-lint 2>/dev/null; ~/.agents/bin/skil
 
 - **Office 文档能力不需要系统 LibreOffice**：dsh 安装自带 `@deepseek-ai/libreoffice-kit`，实测 `dsoffice capabilities --json` 的 `runtime.backend=wasm`，转换/渲染/重算可用；**不要**为此装 `libreoffice-fresh`（体积大且用户可能完全不用）。
 - **HarmonyOS 命令行工具**（hvigor/ohpm/hdc + 内嵌 SDK）只在华为下载中心提供、需账号登录，无法全自动获取；需要时由用户提供 Command Line Tools 包再解压配 PATH。
-- **重复包要清**：如系统 `android-tools` 与 SDK `platform-tools` 都提供 `adb`，保留一个（通常用 SDK 版并确保 PATH 优先）；安装完成后清 `/home/liyou/.cache/dl` 下载缓存与 pacman 缓存可回收数 GB。
+- **重复包要清**：如系统 `android-tools` 与 SDK `platform-tools` 都提供 `adb`，保留一个（通常用 SDK 版并确保 PATH 优先）；安装完成后清远端包管理器的下载缓存与 pacman 缓存可回收数 GB（缓存位置见 `local-environment`）。
 - 用户明确说「用不到」的工具一律卸载：先用 `pacman -Qi` 看安装体积，再 `pacman -Rs` 连同不再需要的依赖一起删（`-Rs` 无人依赖才删），最后 `df -h` 对比。
 
 > 部署完成后的日常用法——把构建/测试/agent 会话等重负载真正放到目标机执行（远程 GUI、headless、项目同步/回传、资源边界）——见 `remote-heavy-offload` skill。
@@ -347,9 +348,7 @@ ssh "$REMOTE" 'loginctl show-user "$USER" -p Linger'        # 期望 Linger=yes�
 ssh "$REMOTE" 'systemctl --user is-enabled <unit>'          # 期望 enabled
 ```
 
-- 时间预期（实测）：常规 `systemctl --user restart` 约 4.6s 开始监听；首次冷启动/偶发重载 30–40s
-  （实测冷启动 38.4s、一次重启 Started→URL 行 37s，均属正常）。验证时给足 60s 再判定失败，
-  别把等待超时误判成服务异常。
+- 时间预期：常规 `systemctl --user restart` 秒级开始监听，首次冷启动/偶发重载可达 30–40s，均属正常；验证时给足 60s 再判定失败，别把等待超时误判成服务异常（判据：`systemctl --user is-active <unit>` = active 且 journal 出现 `dsh web:` 行）。
 - 校验：
 
 ```bash

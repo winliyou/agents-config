@@ -5,7 +5,7 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 
 # Git 工作流（Git Workflow）
 
-任何会产生提交的改动都要加载。红线（主干保护、开发分支不推远程）同时保留在 AGENTS.md，本 skill 提供完整流程与命令。**双主源纪律：改任何一条红线必须两处同改**（`~/AGENTS.md` 与本 skill），只改一处即漂移。
+任何会产生提交的改动都要加载。AGENTS.md 保留 Git 红线的一句话摘要，本 skill 提供完整流程与命令；改红线时同步核对 AGENTS.md 对应条目，保持两处一致。
 
 - 禁止改写 main/master 历史（限主工作树/main 分支）：reset --hard、push --force、rebase；分支内整理历史（rebase/reset）一律在 Worktree 中进行，见下。
 - 合并统一使用 `git merge --ff-only`，禁止 Merge Commit。
@@ -130,16 +130,11 @@ done
 - `git push` 成功 ≠ CI 通过。tag/分支推送后用 `gh run list --limit 3` 核对结论；
   需要失败日志时直接 `gh run view <id> --log-failed`
   （`~/.cache/gh` 已由 sandbox-extra-roots 放行；报 EPERM 就把该目录加进插件配置，见 `sandbox-adaptation`）。
-- CI 长期红会被「上次也是红的」麻痹成常态——Linux CI 因某测试缺平台门控可连续挂 5 次（含纯文档提交）才被发现。
-  看到连续失败必须先修再发，不许带红 tag 发布。
+- 连续失败必须先修再发，不许带红 tag 发布；不要用「上次也是红的」把长期红灯当常态（Linux CI 常见原因是测试缺平台门控）。
 - 同一 commit 双 run（tag 触发 + 分支触发）一绿一红，优先怀疑时间敏感用例 flaky：
   `gh run rerun <id>` 重跑确认；确认 flaky 后应修测试的时间阈值，而不是反复重跑。
 - **GitHub Billing 失败**：GitHub 账号出现「recent account
   payments have failed or your spending limit needs to be increased」注解时，私有仓库
-  Actions 全部 3-13s 即败。**现行策略（不再充值）：碰到该注解的失败
-  直接忽略，不 rerun、不排查、不当发布阻塞；正确动作只有一个——把仓库转 public
-  走标准 CI**（public 仓库 Actions 免费不限额）。
-  **不要走「私有仓库本地构建发版」的替代路径**——该兜底流程不作为现行方案，
-  不维护其操作细节（具体实现见对应仓库的 git 历史；具体时间点/版本号属项目事实，
-  写在项目侧文档，不记在本 skill）。
+  Actions 秒级即败。**现行动作**：碰到该注解的失败直接忽略，不 rerun、不排查、不当发布阻塞；正确动作只有一个——把仓库转 public 走标准 CI（public 仓库 Actions 免费不限额）。
+  **不要走「私有仓库本地构建发版」的替代路径**；项目侧的发版细节写在该项目文档，不记在本 skill。
   除 Billing 注解外，CI 失败仍按上两条处理，不得借本条豁免其他红灯。

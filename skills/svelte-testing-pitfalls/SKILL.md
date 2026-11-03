@@ -34,9 +34,7 @@ expect(aLeft).not.toBe(b.container.querySelector('button')!.style.left);
 
 ## 坑：测试替身掩盖传参类型错误 → NaN 传染
 
-**症状**：重写 `scheduleAmbient` 后，"稀疏性"测试失败显示平均间隔异常小；
-插桩发现游标 `nextAt` 首次迭代就变 `NaN`，循环只走一轮——但所有 rnd 序列、
-手动复算全部正常，极易误判成随机数或循环条件问题。
+**症状**：平均间隔类测试结果异常小、循环只走一轮且不抛错，但 rnd 序列与手动复算都正常。
 
 **根因**：把回调传成了函数本身——`nextNoteDelay(rnd, intensity)`（少写 `()`），
 而 `nextNoteDelay(rnd: number, ...)` 内部 `Math.min(1, rnd)` 对函数返回 `NaN`，
@@ -46,11 +44,10 @@ NaN 一路传染进 `state.nextAt`。`while (x < NaN)` 恒 false，循环静默�
 `fakeAc() as unknown as BaseAudioContext`，`as unknown as` 双重断言关掉了
 整个参数面的类型检查；NaN 比较（`<`、`>`）全部返回 false，不抛异常。
 
-**排障套路**：
-1. 循环"只跑一轮"先打印循环变量的**每个分量**（gap、delay 各自打印），
-   而不是打印总和——总和 NaN 无法定位来源；
-2. 确认每个分量非 NaN 后，怀疑**传参对象/类型**：打印 `typeof rnd`；
-3. `Math.min/max` 收到非 number 会静默返 NaN——凡"收窄到 [0,1]"的代码都值得查实参。
+**判据与排查**：
+1. 循环「只跑一轮」时先打印循环变量的**每个分量**（gap、delay 各自打印），而不是打印总和——总和 NaN 无法定位来源；
+2. 各分量非 NaN 后查**传参类型**：打印 `typeof rnd`，确认没有把函数本身当值传；
+3. `Math.min/max` 收到非 number 会静默返 NaN——凡「收窄到 [0,1]」的代码都要核对实参。
 
 **预防**：测试替身避免 `as unknown as` 双重断言，至少给关键方法保留签名；
 数值游标出现 NaN 时尽早 fail-fast（`console.assert(Number.isFinite(nextAt))`）。
@@ -61,9 +58,8 @@ NaN 一路传染进 `state.nextAt`。`while (x < NaN)` 恒 false，循环静默�
 `svelte-check` 会报 **`<script>` was left open**（`element_unclosed`），且**报错位置指向文件末尾/样式块**，
 与真正出错的那行注释相隔上百行，极易误判成样式块或模板问题。
 
-排查结论（二分验证）：把该文件拆成「只 markup / 只 CSS / markup+CSS / 原文件」四份副本逐个跑 `bun run check`，
-前三份全绿、原文件报错；再 `diff` 隔离出唯一差异就是注释文本 → 注释里的 `<style>` 才是触发点。
-**修法**：注释改用中文描述（"组件样式块"、"标签字面量"），不要在内联注释里写 `<xxx>` 形式的标签。
+**判据**：报错位置在文件末尾/样式块，与真正出错的注释相隔上百行；用二分法隔离——把文件拆成「只 markup / 只 CSS / markup+CSS / 原文件」四份分别跑 `bun run check`，前三份全绿、原文件报错，唯一差异就是注释文本。
+**修法**：注释改用中文描述（「组件样式块」「标签字面量」），不要在内联注释里写 `<xxx>` 形式的标签。
 
 ## 坑：内联 style 里写 animation + 组件内 @keyframes = 动画永不生效
 
@@ -92,8 +88,7 @@ Svelte 会给组件样式块里的 `@keyframes` **加作用域前缀**（`toastI
 
 ### 根因与排障
 
-- 组件模板引用了既未 `import` 也未在组件内声明的标识符。本例是刷新按钮
-  写了 `onclick={fetchPeers}` 而 import 清单漏了它。
+- 组件模板引用了既未 `import` 也未在组件内声明的标识符（如 `onclick={fn}` 但 import 清单漏了 `fn`）。
 - `vite build`（rolldown + svelte 插件）与 `svelte-check` 默认都不拦
   （未定义全局是合法 JS）。**只有真实浏览器运行才暴露**。
 - 排障套路（无需任何测试框架；浏览器操作一律走 `agent-browser`，红线见 `browser-automation-safety` skill，禁止直接 spawn Chrome）：

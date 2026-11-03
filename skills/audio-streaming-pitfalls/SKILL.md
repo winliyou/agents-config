@@ -1,6 +1,6 @@
 ---
 name: audio-streaming-pitfalls
-description: 跨设备实时音频流（采集→传输→播放）的正确架构与做法：WASAPI Loopback 捕获要点、float 全链防削波、AudioWorklet 环形缓冲播放、协议版本防呆、CDP 抓包分析方法。触发：Windows 系统声音捕获/映射、WASAPI Loopback、miniaudio 音频、Web Audio 播放破音/断续/电流声、音频串流实现或排查、实时音频 PCM 传输。
+description: 跨设备实时音频流（采集→传输→播放）的正确架构与做法：WASAPI Loopback 捕获要点、float 全链防削波、AudioWorklet 环形缓冲播放、协议版本防呆、采集端按需启停与低占用（与游戏等高负载程序共存）、CDP 抓包分析方法。触发：Windows 系统声音捕获/映射、WASAPI Loopback、miniaudio 音频、Web Audio 播放破音/断续/电流声、音频串流实现或排查、实时音频 PCM 传输、串流程序拖慢同机游戏/其它程序、按需启停采集。
 ---
 
 # 跨设备实时音频流：采集 → 传输 → 播放
@@ -37,6 +37,73 @@ description: 跨设备实时音频流（采集→传输→播放）的正确架�
 
 - PCM 格式升级必须两端同时生效。能力广播携带 `audio_format`（如 "f32le-48000-stereo"），
   前端检测不一致时**禁用映射 + 明确提示两端更新**（防呆优先于容错）。
+
+## 采集端低占用与按需启停（与游戏等高负载程序共存）
+
+- **按订阅数启停采集，而不是只在回调里丢数据**：无人订阅时不打开音频设备、不安装系统级输入钩子；
+  订阅归零延迟数秒再停（宽限 5–8s），避免映射开关抖动导致设备/钩子反复初始化。
+  只做 emit 门控仍会占着 WASAPI 流、麦克风 APO 与全局钩子——这正是「程序开着就掉帧」的常见来源。
+- **系统声与麦克风分开订阅**：只映射系统声时不要顺带打开麦克风采集（采集 APO/降噪、audiodg CPU、隐私指示）。
+  信令里分 `sys_audio`/`mic_audio` 两路，旧版并集字段保留兼容。
+- **本机共享开关必须门控采集**：用户关闭「共享麦克风」后，即使对端仍在订阅也要立即停止采集，不能只改发现广播。
+- **采集线程优先级不要随便降**：采集线程稳态 CPU 通常 <1%，降优先级对帧率几乎无感，却会在 CPU 满载时
+  拉长调度延迟导致 WASAPI overrun（断音）；保持 miniaudio 默认即可。
+- Opus 编码复杂度 5 足够（128kbps 立体声听感基本无差，CPU 比默认 8/10 低约 1/3）。
+- **按需启停的三个关键约束**（同一引擎对象反复 Start/Stop 时）：
+  1. 展示名/状态字段不能兼作「本次是否找到设备」的判断——Stop 不清空展示名，第二次 Start 会误跳过
+     「无虚拟回环设备」回退，退化成采集默认麦克风并当系统声推流。用函数返回值表达本次探测结果。
+  2. 编码/诊断 goroutine 必须以参数接收本次的队列与退出信号（如 `go encodeLoop(queue, done)`），
+     不要读引擎字段：Stop 关闭旧通道后 Start 立即重建字段，旧 goroutine 读字段就是数据竞争（`-race` 可复现）。
+  3. Stop 要 join 编码 goroutine（或确保它随退出信号退出），否则每次启停泄漏一个 goroutine。
+- **Windows 低级钩子 API 名**是 `SetWindowsHookExW`（user32，单 Hook）。拼写成 `SetWindowsHooksExW` 时
+  `NewProc().Find()` 静默失败 → 永远走 60Hz 轮询回退（`GetAsyncKeyState` 每帧上百次系统调用，订阅时反而更耗 CPU）。
+  钩子安装失败要有日志，便于区分「事件驱动」与「轮询回退」。
+- 性能基准不要用全零 PCM：Opus 对静音走快速路径，会低估编码成本约 2 倍以上；用真实正弦/音乐信号。
+- 验证方法：暴露各引擎运行状态（如 `/api/status` 的 `*_engine`/`*_capture` 布尔），无人订阅时应全 false；
+  Windows 上用任务管理器/Process Explorer 拆分主进程与 WebView2 子进程的 CPU/GPU，用 PresentMon/CapFrameX
+  对比 1% low 与 P99 帧时间（只看平均 FPS 会漏掉抖动），按「只开着不映射 → 映射系统声 → 映射键鼠」逐项 A/B。
+
+## 端到端延迟的分侧测量与展示（判断延迟在发送端还是接收端）
+
+- **不要为测延迟改音频帧格式**（在 Opus 包前塞时间戳）：旧接收端遇到未知 tag 会把整包当 PCM 播放（噪声），
+  等于强制两端同时升级。用**独立 WS 文本消息**上报发送端统计（如 `{"type":"audio_stats","sys":{...}}`）：
+  旧前端会忽略未知文本类型、旧接收端不解析，天然向后兼容。
+- 分侧公式（UI 标注「估算」，不是端到端时钟同步测量）：
+  `总延迟 ≈ 发送端(采集块时长 + 采集回调→编码完成 + 广播队列→WS 写完成) + 网络 RTT/2 + 接收端(环形缓冲水位/采样率 + AudioContext baseLatency+outputLatency)`。
+- **发送端**：采集回调给每帧打时间戳入队；编码 goroutine 计算「采集→编码完成」，它包含 Opus 20ms 组帧等待
+  （最容易被忽略的固定延迟）；WS 写完成时间差统计发送队列。用 EWMA 平滑避免 UI 数字乱跳；
+  Stop 的统计复位移到编码锁释放之后，否则在途编码写会覆盖复位值（窄竞态）。
+- **网络**：出站连接每 3s 发 WS ping，pong handler 只认自己发过的 pending ping（gorilla `WriteControl` 可与其它写并发）。
+  亚毫秒 RTT 向上取整为 1ms：0 应保留给「未知」，别用 0 表示「已测到但很小」。
+- **接收端**：AudioWorklet 的 `filled/48000*1000` 是当前抖动缓冲延迟；`baseLatency+outputLatency` 是设备输出延迟
+  （WKWebView/Safari 可能没有 `outputLatency` → 按 0 计并在 UI 注明，总量会偏小）。
+  **underflows 持续增长 = 接收端负载高、在反复重新预缓冲**，是最直接的「延迟在接收端」证据。
+- 判断口径：播放缓冲大 / 欠载增长 → 接收端；采集块/编码/发送分项大 → 发送端；RTT 大 → 网络。
+- 手动添加 IP 的对端没有发现广播：默认 provides 是全 true 但 `audio_format` 为空，前端协议防呆会因此
+  **禁用音频映射**；正确做法是 add 时异步 GET 对端 `/api/self` 补全能力声明（含 audio_format）与 OS/设备名。
+
+## 低占用的其余来源（连接/解码/分配/基准）
+
+- **「连接动作」本身不得启动采集**：按需启停最常见的漏网之鱼是「新连接默认订阅」——任何 WS 连接
+  （手机浏览器打开 UI、对端重连）会立刻 SetSubscribers(1) → 启动音频设备 + 安装键鼠钩子，
+  握手到达后再关掉，却仍要跑满 idleGrace（5–8s），Windows 上还会每次连接都 churn 音频设备、
+  麦克风隐私指示闪烁。正确做法：新连接一律默认不订阅；旧版对端用「宽限兜底」（如 500ms 后仍未
+  收到 set_mapping 才全开）兼容；显式订阅到达即取消兜底；注销时停定时器。验证：连接后 100ms 内
+  订阅计数应为 0，宽限到点后旧端才变 1。
+- **接收端解码门控**：把对端 Opus 解码成 PCM 只应发生在「确实有客户端需要 PCM 且订阅了该流」时
+  （WKWebView/Safari 无 WebCodecs AudioDecoder 才需要）。否则每帧解码 + 每包约 16KB 分配是纯浪费
+  （实测 0.15–0.21% 单核/路 + 1.6MB/s）；Windows/Chrome 客户端应继续收 Opus。
+- **采集编码零分配**：`accum` 按帧容量预分配 + 编码后原地左移（`copy` 后缩长），不要用
+  `accum = accum[N:]`（容量很快耗尽、反复扩容）；让编码器直接消费采集的 float32 小端字节流，
+  省掉每块一份 `[]float32` 中转（10ms 立体声 ≈3.8KB/块，两路 ≈1MB/s 堆分配）。
+- **网卡枚举缓存**：IPv6 地址枚举不要放在 IPv4 地址双层循环里（每遇一个 v4 就全量 `InterfaceAddrs`，
+  O(N²) 系统调用 + 重复入表）；缓存切片的**读取也必须加锁拷贝**，否则与 TTL 刷新并发读写是数据竞争
+  （`-race` 可复现，且旧代码常见）。
+- **GUI 子系统日志**：`io.MultiWriter(os.Stdout, file)` 在 stdout 写失败时短路（Windows GUI 子系统
+  stdout 是无效句柄），会导致日志文件全空、排查信息全丢；必须 file-first、stdout 尽力而为。
+- **基准要用真实信号**：Opus 对全零/纯音有快速路径，静音基准会低估编码成本 2–2.8×；
+  用游戏混合/白噪近似真实负载。高 load 机器上 `ns/op` 噪声大，回归判定优先看 `B/op` 与 `allocs/op`
+  （确定性指标），并用 `git archive` 旧树 + `go test -overlay` 注入测试做 A/B（不改工作区源码）。
 
 ## 排障方法
 

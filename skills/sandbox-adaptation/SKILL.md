@@ -48,7 +48,7 @@ DSH 沙盒问题第一入口。**本机唯一首选解法：凡是「某个 home
 
 - 三分类：①路径权限失败（第一节）；②工具自身故障（参数/版本/网络/真 bug）；③嵌套沙盒子进程。
 - 先读工具自己的日志/落盘输出，不要只看终端最后一行：很多 CLI 把「目录不可写」报成网络/协议错误（典型：bun 报 `tempdir EPERM` 实为包缓存、Chrome 表层报 `CDP response channel closed`、npm 报「root-owned files」）。
-- **退出码会说谎**：`go vet` 曾打完 EPERM 仍 exit 0；构建失败被管道吞掉。判据看输出文本里是否出现 `operation not permitted`。
+- **退出码不可靠**：`go vet` 等工具可能在打印 EPERM 后仍 exit 0，构建失败也可能被管道吞掉；判据看输出文本里是否出现 `operation not permitted`。
 - 崩溃取证：`~/Library/Logs/DiagnosticReports/*.ips`（首行 header JSON + 正文 JSON）。
 
 ## 四、降低子进程沙盒的判定规则（授权范围仅限 agent-browser/Chrome）
@@ -78,4 +78,4 @@ DSH 沙盒问题第一入口。**本机唯一首选解法：凡是「某个 home
 - **不得跳过功能验证**：失败就说明原因，不得用降级工具链、禁用检查等方式制造通过假象。
 - 连插件配置都覆盖不到时（路径硬编码且无配置面、嵌套沙盒不可关）：向用户请求对**单条命令**的 `danger-full-access` 提权，并说明为何前面几条不适用。审批是设计好的用户决策点，不是障碍。
 - `git worktree remove` 报 `Permission denied` 且残留 Go 模组缓存时：Go 模块缓存文件是 0444 只读，`chmod -R u+w <worktree>` 后再删（worktree 的 `.workwork/` 缓存可能残留此类文件）。
-- **反模式**：用 `GOCACHE`/`GOMODCACHE`/`npm_config_cache`/`HVIGOR_USER_HOME`/`DOCKER_CONFIG`/`ANDROID_USER_HOME`/`HOME` 重定向到 `.workwork/` 规避 home 不可写——这类重定向不是现行方案，不要再写这类 export，也不要记进文档/skill；目录不可写按第一节加配置即可。
+- **反模式**：用 `GOCACHE`/`GOMODCACHE`/`npm_config_cache`/`HVIGOR_USER_HOME`/`DOCKER_CONFIG`/`ANDROID_USER_HOME`/`HOME` 重定向到 `.workwork/` 规避 home 不可写——禁止再写这类 export，也不要记进文档/skill；目录不可写按第一节加配置即可。

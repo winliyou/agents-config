@@ -32,7 +32,7 @@ ln -s ~/.agents/bin/agent-browser ~/.local/bin/agent-browser
 （上游更新会静默冲掉），需要补充就写自建 skill。`skill-lint` 默认跳过，输出 `SKIP` 属预期，
 加 `--with-third-party` 才检查。
 
-### 更新（官方 CLI，2026-10-31 实测）
+### 更新（官方 CLI）
 
 统一用 skills CLI，不要手工改文件：
 
@@ -64,18 +64,17 @@ npx skills add <owner/repo> -g -y -s <name> --copy
 | `find-skills` | `vercel-labs/skills` |
 | `brand` / `design` / `design-system` / `slides` / `ui-styling` / `ui-ux-pro-max` | `nextlevelbuilder/ui-ux-pro-max-skill` |
 
-后 6 个常被误认成 ClaudeKit 付费套件（frontmatter 里有 `metadata.author: claudekit`），
-**实际来源是公开仓库 `nextlevelbuilder/ui-ux-pro-max-skill`**（14 万+ star，仍在高频更新）。
-2026-10-31 已按此来源统一更新并纳入 CLI 跟踪：
+后 6 个的 frontmatter 里写着 `metadata.author: claudekit`，但**实际来源是公开仓库
+`nextlevelbuilder/ui-ux-pro-max-skill`**。已按此来源纳入 CLI 跟踪：
 
 ```bash
 npx skills add nextlevelbuilder/ui-ux-pro-max-skill -g -y \
   -s brand -s design -s design-system -s slides -s ui-styling -s ui-ux-pro-max --copy
 ```
 
-> 教训：光看 frontmatter 的 `metadata.author` 会误判来源。判定来源以 `npx skills list -g` 的
-> Source 列为准；查不到时用特征文件名去 GitHub 代码搜索反查（本次靠 `claudekit-pitch-251223`
-> 和 `inject-brand-context` 两个特征串定位到真实仓库）。
+> 判定来源不要只看 frontmatter 的 `metadata.author`（会被上游作者字段误导）；以
+> `npx skills list -g` 的 Source 列为准，查不到时用特征文件名去 GitHub 代码搜索反查
+> （例如 `claudekit-pitch-251223`、`inject-brand-context` 这类特征串）。
 
 ## 知识保鲜与自检
 
@@ -90,7 +89,7 @@ skill-lint --with-third-party # 连第三方 skill 一起查（默认跳过）
 ```
 
 检测：frontmatter 缺失（DSH 会静默忽略该 skill）、description 超 500 字符（目录截断丢触发词）、
-引用路径不存在、引用不存在的 skill 名、全文无实测日期、项目级孤儿 skill（无任何 Markdown 提及）。
+引用路径不存在、引用不存在的 skill 名、正文出现日期标注、项目级孤儿 skill（无任何 Markdown 提及）。
 
 退出码 0 = 无 ERROR。**每次新增或大改 skill 后建议跑一次**；ERROR 必修，WARN 逐条判断
 （「路径不存在」在说明某文件本机未配置时属正确描述，脚本已对含「不存在/未配置」的行豁免）。

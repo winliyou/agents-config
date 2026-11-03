@@ -64,7 +64,7 @@ pid = 10439 type="Foreground" flavor=3 ...   ← 守卫拉起的正常 GUI
 - 光看 `type="Foreground"` 会被 headless 骗过；
 - **Dock 劫持的精确条件 = 唯一的 `com.google.Chrome` Foreground 实例是 flavor=2 的 headless**。
 
-**chrome-guard 的判定因此要收紧**：不能只认 `type="Foreground"`，必须认 `flavor=3`；只判 `type="Foreground"` 会被 headless 骗过而误判「GUI 已存在」（见下节修订）。
+**chrome-guard 的判定因此要收紧**：不能只认 `type="Foreground"`，必须认 `flavor=3`；只判 `type="Foreground"` 会被 headless 骗过而误判「GUI 已存在」。
 
 **端到端验证**：
 
@@ -84,36 +84,21 @@ pid = 10439 type="Foreground" flavor=3 ...   ← 守卫拉起的正常 GUI
 只覆盖「Chrome 原本没开、由守卫冷启动」这一条路径，**不能**推广成「open -g 永远不抢焦点」。
 
 
-## 二、第二类抢焦点源头：chrome-guard 判定正则失效
+## 二、第二类抢焦点源头：chrome-guard 判定失效
 
 
-**症状**：用浏览器自动化时「频繁切换我的焦点，影响日常使用电脑」。
+**症状**：用浏览器自动化时频繁抢焦点、窗口乱跳。
 
-**根因链（三段）**：
+**规则：下面两条必须同时成立，chrome-guard 才不是打扰源；任一不成立都会让守卫自己触发抢焦点**：
 
-1. **判定正则永远不命中**。`chrome-guard` 的 `has_gui_instance()` 用
-   `awk '/^[0-9]+\\) "Google Chrome"/'` 匹配 LaunchServices 条目，但 `lsappinfo list` 的**行首带前导空格**
-   （形如 ` 9) "Google Chrome" ASN:…`）→ `^` 锚点永不成立 → `inblock` 恒 0 → `found` 恒空
-   → **永远返回「无 GUI 实例」**（`--check` 恒为 exit 1）。
-   复现命令（空输出 = 该正则从未命中）：
+1. **解析 `lsappinfo list` 必须容忍行首空白**。条目行形如 ` 9) "Google Chrome" ASN:…`；用 `awk '/^[0-9]+\\) "Google Chrome"/'` 这类 `^` 锚点永不命中 → `--check` 恒 exit 1 → 守卫误判「无 GUI 实例」→ **每次自动化调用**都执行 `open -g -a "Google Chrome"`；`open` 对已在运行的应用 = 激活窗口 = 抢焦点。正确正则：`/^[[:space:]]*[0-9]+\\) "Google Chrome"/`（块结束行同理）。
+   复现命令（空 = 正则未命中）：
    ```bash
    lsappinfo list | awk '/^[0-9]+\\) "Google Chrome"/{print "命中"}'; echo "（空 = 正则从未命中）"
    ```
-2. **判定失败 → 每次自动化调用都真的执行 `open`**。wrapper 每次调用都跑 `chrome-guard`（`agent-browser` 第 148-151 行），
-   判定失败即走「未检测到用户 Chrome GUI 实例 → 后台拉起 `open -g -a "Google Chrome"`」分支。
-   用 shim 拦截 `open` 计数验证：现行实现 **0 次/调用**（错误正则 1 次/调用）。
-3. **`open` 对已在运行的 Chrome = 激活窗口 = 抢焦点**。sample 采样：执行后约 **2.1s**，前台由
-   「DeepSeek Harness」变为「Google Chrome」。每触发一次自动化就被切一次，且每次还要多等
-   **~17–19 秒**（`sleep 2` + 30×`0.5s` 等不到注册的超时循环）。
 
-**现行实现**：
+2. **安全阀必须校验锁里的 pid 是否存活**。profile 被存活进程持有时，即使判定不到 Foreground（注册延迟/口径差异）也不执行 open；只判断「`SingletonLock` 文件是否存在」会在 **stale lock**（Chrome 崩溃/被杀后锁残留、pid 早已不存在）时也拒绝 open——把「频繁抢焦点」换成「点 Dock 打不开 Chrome」，属更严重回归。正确实现：
 
-1. 判定正则允许前导空白：`/^[[:space:]]*[0-9]+\\) "Google Chrome"/`（块结束行同理）；
-2. **加安全阀**：profile 被**存活进程**持有时，即使判定不到 Foreground（注册延迟/口径差异）也**不执行 open**，直接放行。
-
-   **安全阀必须校验锁里的 pid 是否存活**：只判断「\`SingletonLock\` 文件是否存在」，
-   会在 **stale lock**（Chrome 崩溃/被杀后锁残留、pid 早已不存在）时也拒绝 `open` —— 把
-   「频繁抢焦点」换成了「点 Dock 打不开 Chrome」，属于**更严重的回归**。正确实现：
    ```bash
    has_profile_lock() {
      local lock="$PROFILE_DIR/SingletonLock" pid
@@ -124,45 +109,13 @@ pid = 10439 type="Foreground" flavor=3 ...   ← 守卫拉起的正常 GUI
    }
    ```
 
-**现状**：`--check` exit=0（`GUI 实例在运行，Dock 安全`）；热路径 **32–104ms**；
-`--check` **300/300 次正确**（最大 104ms，平均 40ms）；完整调用 50 连跑 `open` 调用数 **0/50**（桩正例自测 A=1 确认有效）；
-真实 `agent-browser tab list` **20 连跑前台零变化**，0 失败。
+**验证（每次改守卫都跑）**：
 
-**边界矩阵（隔离测试，假 `open` + 假 profile，四组合全 PASS）**：
+- `~/.agents/bin/chrome-guard --check` 应 exit 0；
+- 用 `open` 的 PATH shim 记录调用次数：正常路径应为 **0 次/调用**。shim 必须先跑「确定该命中」的正例自测（A=1），确认桩真的被执行，否则会得到「0 次」的假通过；
+- `agent-browser tab list` 连续执行期间 `lsappinfo front` 保持不变（抓 2s 级瞬时抢占，不能只看首尾）；
+- 隔离测试（假 `open` + 假 profile）覆盖四场景：正常（GUI 检测成功 → 不 open）、注册延迟（有锁 + pid 活 → 不 open）、stale lock（有锁 + pid 死 → **必须 open**）、真没开（无锁 → **必须 open**）。
 
-| 场景 | GUI 检测 | profile 锁 | 期望 | 结果 |
-|---|---|---|---|---|
-| 1 正常 | 成功 | — | 不 open（exit 0） | ✅ open=0 |
-| 2 注册延迟 | 失败 | 有锁 + pid 活 | 不 open（防抢焦点） | ✅ open=0 |
-| 3 Chrome 崩溃残留锁 | 失败 | 有锁 + pid 死 | **必须 open**（否则 Dock 保护失效） | ✅ open=1 |
-| 4 Chrome 真没开 | 失败 | 无锁 | **必须 open** | ✅ open=1 |
-
-**语言选型结论（维持 bash）**：
-
-结论：**问题不在 bash，在「解析人类可读文本」这个做法**。
-把各语言的可行判据都实现并压测后，结论是 **维持 bash**：
-
-| 方案 | 耗时 | 判据 | 交叉编译 | cgo | 结论 |
-|---|---|---|---|---|---|
-| **bash（现行）** | 32–50ms | `lsappinfo` flavor=3 + 锁安全阀 | — | 否 | ✅ **保留** |
-| Swift + AppKit | 11ms | `activationPolicy` | ❌ minos 15.0 | 否 | ❌ 需编译/分发，收益仅 40ms |
-| Go + cgo | 17–24ms | `activationPolicy` | ❌ | **是** | ❌ 「跨平台」优势消失 |
-| Go 纯版（锁+pid） | 5–8ms | 锁+pid | ✅ | 否 | ❌ 判据退化，分不清 GUI/headless |
-| Go 纯版 + 命令行 | 5ms | sysctl 读 `--headless` | ✅ | 否 | ⚠️ 技术上可行，但本机用不到跨平台 |
-
-关键事实（均已验证，无需重复验证）：
-- `activationPolicy` 能**精确**区分 GUI(`regular`)/headless(`prohibited`)，是本需求的语义级判据；但它属于 AppKit →
-  必须 cgo → **cgo 让交叉编译失效**（报 `runtime/cgo: gcc_amd64.S unknown token`）。「跨平台」和「精确判据」在 Go 里互斥。
-- 纯 Go 的 `sysctl KERN_PROCARGS2` 可读进程命令行并检查 `--headless`，实测与 `activationPolicy` **逐实例 100% 一致**，
-  且无需 cgo、可三平台静态编译（实测 darwin/arm64、darwin/amd64、linux/amd64 全成功，minos 13.0）。
-  但这是「Chrome 行为事实」而非「API 契约」，稳定性弱于系统 API。
-- `lsappinfo -xml` 在本机**是坏的**（只输出 174 字节空行），不要指望它做结构化输出。
-- **决定性理由**：这个 guard 只跑在本机 macOS 上（`lsappinfo`/Chrome profile 路径/`open -a` 全是 macOS 专有），
-  「跨平台编译」是需求里不存在的能力；而 32–50ms 与 5–11ms 的差异用户完全无感。
-  为不存在的收益引入编译与分发成本、并把判据从「系统 API 契约」降级为「行为观察」，不划算。
-
-**安全前提**：浏览器自动化的 profile **一定不会用日常 Chrome 的 profile**。
-因此「锁判据可能分不清 GUI/headless 复用同一 profile」这一理论风险在本机不成立，bash 版的双判据足够。
 
 **验证方法（以后审计这类问题照做）**：
 
@@ -179,7 +132,7 @@ pid = 10439 type="Foreground" flavor=3 ...   ← 守卫拉起的正常 GUI
   任何「确保某 GUI app 在跑」的守卫逻辑，都必须先**可靠判定它是否已在运行**，否则守卫本身变成打扰源。
 - **awk 块匹配 `lsappinfo list` 必须容忍行首空白**；这类「解析别人输出」的正则失效是**静默的**（不报错、只是永远走失败分支），
   必须用「已知有 GUI 时 `--check` 是否返回 0」这类**带正例的自测**才能发现。
-- 凡是「每次调用都跑」的守卫脚本，必须验 **热路径耗时**（错误正则下约 18.6s/次）与**副作用**（open、窗口、焦点）。
+- 凡是「每次调用都跑」的守卫脚本，必须验**热路径耗时**与**副作用**（open、窗口、焦点）；解析失败会让每次调用都触发 `open` 与超时等待。
 - 「`open -g` 不抢焦点」的结论**只覆盖冷启动路径**，
   不能当通用结论沿用 —— **结论必须写清适用前提**。
 - **修「过度打扰」类问题时，必须同时验证「该做的动作没被一起干掉」**：
@@ -187,35 +140,19 @@ pid = 10439 type="Foreground" flavor=3 ...   ← 守卫拉起的正常 GUI
   **正确性 = 不该动的不动 + 该动的照动**，只验前者等于没验。
 - **测试装置本身要先自测**：shim 会因变量未导出而静默失效，导致「open=0」的假通过。
   凡是用 shim/桩做对照实验，先跑一次「确定该命中」的正例，确认桩真的被调用，再拿它下结论。
-- **「换语言」很少是脚本 bug 的解**：文本解析脆弱（正则锚点）与逻辑错误（安全阀没校验 pid）是两个独立问题——
-  前者靠**换判据**（换结构化数据源）解决，后者任何语言都会犯。Swift/Go 各两种实现的评估结论仍是维持 bash：
-  **先问「瓶颈是语言还是判据/逻辑」**，再谈迁移。收益量级：换语言最多省 40ms，
-  而修复每次调用省 18.6 秒、且不再抢焦点 —— 后者才是该投入的地方。
+- **「换语言」很少是脚本 bug 的解**：文本解析脆弱（正则锚点）与逻辑错误（安全阀没校验 pid）是两个独立问题——前者靠**换判据**（换结构化数据源）解决，后者任何语言都会犯。**先问「瓶颈是语言还是判据/逻辑」**，再谈迁移；换语言收益是毫秒级，而修复守卫失效省下的是每次调用的秒级等待与抢焦点，后者才值得投入。
 
 
-## 三、无 GUI 却未拉起 headed：PID 回绕复用与 open 缺 -n
+## 三、无 GUI 却未拉起 headed：三条必须同时满足的规则
 
 
-**症状**：没有拉起 headed 浏览器就开始使用 headless 浏览器。
+**症状**：需要 GUI Chrome（或用户点 Dock）时，只有 headless 实例，没有真 GUI 窗口。
 
-**根因链（三处缺陷叠加）**：
+**规则（三条同时满足才生效，任一缺失都会让 chrome-guard 失效）**：
 
-1. **安全阀误判：PID 回绕复用使得 `has_profile_lock` 恒为真**。
-   - `has_profile_lock` 若仅用 `kill -0 "$pid"` 校验锁文件中的 PID 是否存活，就会误判。
-   - macOS 的 PID 会回绕复用：Chrome 崩溃残留的 `SingletonLock -> yinghuoren.local-530`，其 PID 530 可能被系统常驻守护进程 `suggestd` 复用。
-   - `kill -0 530` 恒返回 0（`suggestd` 存活）→ `chrome-guard` 误以为用户 Chrome 正在运行/启动中 → 触发安全阀分支：`profile 已锁定但检测不到 Foreground 条目，判定为注册延迟/口径差异；为避免抢焦点，不执行 open` 并直接 `exit 0`！
-   - 导致 `chrome-guard` 永久跳过了对真实 GUI Chrome 的拉起。
-2. **`open` 缺少 `-n`：当 headless 已经占领 bundle ID 时，普通 `open` 无法唤起新 GUI 实例**。
-   - LaunchServices 按 `com.google.Chrome` 路由 `open` 命令；若 headless 已经在跑，`open -g -a "Google Chrome"` 只是向现有的无窗口 headless 进程发送 Open 事件（该进程忽略事件），根本不会 spawn 出真正的 GUI 进程，等满 15 秒超时失败。
-   - 必须加 `-n`（`--new`）显式强制 LaunchServices 新建一个应用实例。
-3. **残留锁文件阻碍 Chrome 启动**：
-   - 若 `SingletonLock` 残留且指向存活的非 Chrome 进程，Chrome 启动时其自身 `ProcessSingleton` 连接套接字失败后可能报 `Failed to create .../SingletonLock: File exists` 中断启动。必须在启动前将陈旧的残留锁清理掉。
+1. **`has_profile_lock` 必须同时校验 PID 存活与进程身份**：只做 `kill -0 "$pid"` 会误判——macOS 的 PID 会回绕复用，崩溃残留的 `SingletonLock -> yinghuoren.local-530` 中的 PID 530 可能被 `suggestd` 等常驻进程复用，`kill -0` 恒为真 → 守卫误以为 GUI 正在启动 → 安全阀直接 `exit 0`，永久跳过拉起。必须同时满足：① `kill -0 "$pid"` 存活；② 进程名/命令行（`ps -p "$pid" -o comm=` 或 `lsof`）确实包含 `Google Chrome`；③ 对应的 `SingletonSocket` 存在且为有效 UNIX Domain Socket（`[ -S ... ]`）。
+2. **`open` 必须带 `-n`（`--new`）**：headless 已占用 `com.google.Chrome` 时，普通 `open -g -a "Google Chrome"` 只是向现有无窗口 headless 进程发 Open 事件（该进程忽略），不会 spawn 真 GUI，等满 15 秒超时；`open -n -g -a "Google Chrome"` 才会强制 LaunchServices 新建 GUI 实例并注册 `flavor=3 Foreground`。
+3. **启动前清理陈旧残留锁**：若 `SingletonLock` 存在但 `has_profile_lock` 为假（无存活 Chrome 进程持有），先 `rm -f` 该 profile 下 `Singleton*`；否则残留锁指向存活的非 Chrome 进程时，Chrome 自身的 `ProcessSingleton` 连接套接字失败，可能报 `Failed to create .../SingletonLock: File exists` 中断启动。
 
-**现行实现（`~/.agents/bin/chrome-guard`）**：
-1. **收紧 `has_profile_lock` 判据**：
-   - 必须同时满足：① `kill -0 "$pid"` 存活；② 检查进程名/命令行（`ps -p "$pid" -o comm=` 或 `lsof`）确实包含 `Google Chrome`；③ 对应的 `SingletonSocket` 存在且为有效 UNIX Domain Socket（`[ -S ... ]`）。
-2. **启动前清理陈旧残留锁**：
-   - 若 `SingletonLock` 存在但 `has_profile_lock` 为假（无存活 Chrome 进程持有），在 `open` 前主动清理 `$PROFILE_DIR/Singleton*`。
-3. **`open` 增加 `-n`**：
-   - `open -n -g -a "Google Chrome"`，即使 headless 已经在跑，也能强制新建 GUI Chrome 实例并注册 `flavor=3 Foreground`，恢复 Dock 正常响应。
+**验证**：`~/.agents/bin/chrome-guard --check` exit=0；`open -a "Google Chrome"`（等价点 Dock）exit=0 且 `lsappinfo list` 出现 `type="Foreground" flavor=3`；`agent-browser tab list` 期间 `lsappinfo front` 不变。
 

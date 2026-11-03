@@ -97,48 +97,33 @@ CDP=$(agent-browser get cdp-url | tail -1)
 
 **注意**：浏览器生命周期、owner、标签、登录态仍全部由 agent-browser 管理；这条 CDP 只是补一条 CLI 缺失的模拟参数，**不属于自研管线**（不 spawn、不管端口、不管 daemon、不进 profile）。
 
-**禁止恢复的实现**（已清理，备份在 `~/.dsh/backups/selfmade-pipelines-20261021-002707/`）：`某前端项目/.workwork/cpu-r12/*.mjs`（5 个 CPU 探针）、`ui-audit/auto-chrome.sh`（常驻 headless 启动器）、`ui-r12/shot-html.mjs`（HTML→PNG）、`某项目/.workwork/gemini-gen/<项目>-gemini-profile-chrome.plist`（LaunchAgent）；9421/9333/9441/9223 常驻端口不得再启用；`~/.agent-browser/profiles/{auto,fixg1,isoProbe,myBatch,probe-g1,probe-g2}` 已清理、不得再建。
+**禁止恢复的实现**：不得再建自研 CDP 管线（自写 Chrome 启动器、HTML→PNG 脚本、LaunchAgent 常驻 headless、CPU 探针等）；9421/9333/9441/9223 等非标准调试端口不得启用；`~/.agent-browser/profiles/` 下只应有 `main`（owner）与按用途临时创建的 profile，测试 profile 用完即删、不得常驻。
 
 ## 五、wrapper exit 127：解释器 PATH 问题
 
 
-**症状**：`agent-browser <任意命令>` 返回 **exit 127**，stderr 只有 `env: node: No such file or directory`；
-冷启动时每条命令固定耗时 **20,000ms**（`waitForPort` 超时）后才回退。表现为"wrapper 能用但极慢"，
-实际是**完全不可用**——所有真实调用都失败，只是失败被 `Bun.spawnSync` 的 pipe 吞掉、输出重定向时看不出来。
+**判据**：`agent-browser <任意命令>` 返回 **exit 127**、stderr 只有 `env: node: No such file or directory`，且冷启动时每条命令都要等满 `waitForPort` 超时（约 20s）才回退——此时 wrapper **完全不可用**，不是「慢」；失败被 `Bun.spawnSync` 的 pipe 吞掉，输出重定向时尤其看不出来。
 
-**根因**：wrapper 用 `Bun.spawnSync([REAL, ...])` 直接执行 `agent-browser.js`，而该文件 shebang 是
-`#!/usr/bin/env node` —— 即**靠 PATH 去查 node**。
-
-本机 node 由 **nvm** 管理（`~/.nvm/versions/node/vX/bin/node`），**装得好好的、用户终端里也正常可用**（zsh 加载
-`.zprofile`/`.zshrc` 后 PATH 含该目录）。真正的坑是：**DSH 会话 spawn 的子进程 PATH 不一定包含 nvm 目录**
-（取决于会话/沙盒/启动方式）。同一台机器实测对照：
+**机制**：wrapper 用 `Bun.spawnSync([REAL, ...])` 直接执行 `agent-browser.js`，该文件 shebang 是 `#!/usr/bin/env node`——**靠 PATH 查 node**。本机 node 由 nvm 管理（`~/.nvm/versions/node/vX/bin/node`），用户终端里正常可用（zsh 加载 `.zprofile`/`.zshrc` 后 PATH 含该目录），但 **DSH 会话 spawn 的子进程 PATH 不一定包含 nvm 目录**（取决于会话/沙盒/启动方式）：
 
 | 执行环境 | `command -v node` | 直接执行 `agent-browser.js --version` |
 |---|---|---|
-| PATH 含 `~/.nvm/versions/node/vX/bin` | 找到 | `agent-browser 0.38.2` ✅ |
+| PATH 含 `~/.nvm/versions/node/vX/bin` | 找到 | 正常输出版本 ✅ |
 | PATH 不含 nvm（如手写的 `~/.bun/bin:/opt/homebrew/bin:/usr/local/bin:...`） | 找不到 | `env: node: No such file or directory` ❌ |
 
-失败连锁：所有 `[REAL, ...]` 调用 exit 127 → `bootstrapOwner()` 静默失败 → owner 永远起不来 →
-`waitForPort()` 每条命令等满 20 秒。
+失败后 `bootstrapOwner()` 静默失败 → owner 起不来 → 每条命令等满 `waitForPort` 超时。
 
-**排查口径**：不要在用户终端里验证（那里当然有 node），要在**实际跑 wrapper 的那个子进程环境**里验证：
-`env -i PATH="<该环境的 PATH>" /path/to/agent-browser.js --version`。
+**排查口径**：不要在用户终端里验证（那里当然有 node），要在**实际跑 wrapper 的那个子进程环境**里验证：`env -i PATH="<该环境的 PATH>" /path/to/agent-browser.js --version`。
 
-**实现**（`~/.agents/bin/agent-browser` 第 63 行 + 全部调用点）：
-```ts
-const JS_RUNNER = process.execPath;   // 本文件由 bun 执行 → 即 bun 绝对路径
-// 所有 [REAL, ...] → [JS_RUNNER, REAL, ...]
-```
+**规则**：
 
-**现状**：冷启动约 **1.9s**、热路径 231–304ms；
-`open` / `get title` / `eval` / `screenshot` 全部 exit=0（截图 71KB 真实生成）；用户 Chrome 未受影响。
-
-**排查提示**：看到 wrapper "慢"或"没反应"，**第一步先看 exit code**（`agent-browser get title; echo $?`）。
-exit 127 = 解释器问题；exit 0 但无输出 = 另一回事。不要只看耗时。
-
-**规则**：`Bun.spawnSync` / `execFile` 直接执行带 `#!/usr/bin/env node` shebang 的脚本时，
-必须确认 `node` 在**子进程 PATH** 里；本机 node 在 nvm 下，任何不经过交互式 shell 的 spawn 都拿不到它。
-稳妥做法是显式用 `process.execPath`（或 `bun`/`node` 绝对路径）作为 runner。
+1. wrapper 全部调用点用 `process.execPath` 作为 runner（本文件由 bun 执行 → 即 bun 绝对路径），不得依赖 `#!/usr/bin/env node` 的 PATH 解析：
+   ```ts
+   const JS_RUNNER = process.execPath;
+   // 所有 [REAL, ...] → [JS_RUNNER, REAL, ...]
+   ```
+2. 看到 wrapper「慢/没反应」先看 exit code（`agent-browser get title; echo $?`）：exit 127 = 解释器问题；exit 0 但无输出 = 另一回事，不要只看耗时。
+3. `Bun.spawnSync` / `execFile` 执行带 `#!/usr/bin/env node` shebang 的脚本时，必须确认 `node` 在**子进程 PATH** 里；稳妥做法是显式传 `bun`/`node` 绝对路径。
 
 ## 六、复用架构与 close 硬闸细节
 
@@ -156,7 +141,7 @@ exit 127 = 解释器问题；exit 0 但无输出 = 另一回事。不要只看�
 
 socket 与状态落点：`~/.agent-browser/*.sock`；默认目录不可写时 wrapper **直接报错退出**（不重定向 TMPDIR/.workwork），提示提权执行。
 
-**验收基线**：owner + 3 房客 × 5 轮交错 open/eval **5/5 通过**（每会话恒定看到自己的页面）；3 会话真并发 3/3；12 轮 soak 12/12；跨进程 `localStorage` 互不串；owner Chrome 全程存活（daemon pid 不变）；owner 崩溃 + 脏状态自愈后隔离仍成立；5 次房客 open+close 无标签泄漏。
+**验收判据（逐条实测）**：owner + 3 房客交错 open/eval 时每会话恒定看到自己的页面；多会话真并发互不串（含跨进程 `localStorage`）；owner Chrome 全程存活（daemon pid 不变）；owner 崩溃 + 脏状态自愈后隔离仍成立；房客 `open`+`close` 循环无标签泄漏。
 
 **四个冲突源**（全部出自本机取证与上游 README）：
 
@@ -171,8 +156,8 @@ socket 与状态落点：`~/.agent-browser/*.sock`；默认目录不可写时 wr
 - **空闲回收禁用**：默认注入 `AGENT_BROWSER_IDLE_TIMEOUT_MS=0`（env 名以 README Options 表为准，`_MS` 结尾，勿凭记忆写成 `IDLE_TIMEOUT`）；调用方显式传 `--idle-timeout` 或同名 env 时不覆盖。**非房客**（owner 与显式独立实例）禁用；房客走 `--cdp` attach，豁免空闲回收、不会 1h 自退（见下条）。
   **房客 daemon 不会 1h 自退**：房客走 `--cdp` attach，属上游"user-attached browsers"，**豁免空闲回收**（`manual-*` daemon 可存活 3h+ 仍健在）。后果：房客的标签只能靠显式 `close`（wrapper 会先摘标签）或下方孤儿 tab 兜底清理回收，别等 daemon 自退。
 - **标签与状态不泄漏**：close 前先摘掉该会话的 pinned tab，close 成功后再清残留状态文件（`.target`/`.config`）。**判别房客的依据**是该 session 的 daemon 是否 ESTABLISHED 连着 owner 端口——独立实例（自带 Chrome）不摘标签，它的标签随自己的 Chrome 消失。显式 `--session <房客名> close` 同样受此清理。
-- **孤儿状态文件兜底清理**：房客 daemon 若自行退出（空闲回收、被 kill），不会带走 `.target`/`.config`——可累积 28 组。wrapper 每次调用会清掉"无活跃 socket **且**进程不存活"的会话状态文件；两个条件同时满足才删，active 会话与 owner 不受影响。
-- **孤儿 tab 兜底清理（`~/.agents/bin/ab-reap-tabs.mjs`）**：状态文件清了，**标签却没人关**——典型规模：一夜可累积 37 个标签（16 个 `about:blank`）。根因链：① 无 `DSH_SESSION_ID` 的调用经 wrapper cwd 哈希兜底（`manual-<sha256("cwd:"+cwd)[:8]>`），同目录调用虽复用同一房客，跨目录仍会换会话、旧会话的 tag 无人关（即下方 session 漂移坑）；② 房客 daemon 永不自退；③ 会话结束无人 `close`；④ 清理只删状态文件不删标签。wrapper 现于**房客模式下每至多 1h**（`~/.agent-browser/.last-tab-reap` 节流）派发一次独立清理进程：**只关 `about:blank` 与无对话内容的 `gemini.google.com/app` 新对话页**，有内容的对话页绝不碰；owner 与调用者会话（经 `AB_REAP_PROTECT_SESSIONS` 传递）受保护。即使误关活会话的标签也无损失——下次调用按 `tab_gone` 自动重绑。**残余风险**：其他并发会话若在新对话页里打了草稿还没发送，草稿会随标签一起没（低概率，已知取舍）。手动跑：`node ~/.agents/bin/ab-reap-tabs.mjs [--dry-run]`——**别在会话中途裸跑**（不带保护 env 时不保护调用者自己，实测关掉过自己的标签）。
+- **孤儿状态文件兜底清理**：房客 daemon 若自行退出（空闲回收、被 kill），不会带走 `.target`/`.config`——可累积数十组。wrapper 每次调用会清掉"无活跃 socket **且**进程不存活"的会话状态文件；两个条件同时满足才删，active 会话与 owner 不受影响。
+- **孤儿 tab 兜底清理（`~/.agents/bin/ab-reap-tabs.mjs`）**：状态文件清了标签却没人关是常态，成因有四：① 无 `DSH_SESSION_ID` 的调用经 wrapper cwd 哈希兜底（`manual-<sha256("cwd:"+cwd)[:8]>`），同目录调用虽复用同一房客，跨目录仍会换会话、旧会话的 tag 无人关（即下方 session 漂移坑）；② 房客 daemon 永不自退；③ 会话结束无人 `close`；④ 清理只删状态文件不删标签。wrapper 现于**房客模式下每至多 1h**（`~/.agent-browser/.last-tab-reap` 节流）派发一次独立清理进程：**只关 `about:blank` 与无对话内容的 `gemini.google.com/app` 新对话页**，有内容的对话页绝不碰；owner 与调用者会话（经 `AB_REAP_PROTECT_SESSIONS` 传递）受保护。即使误关活会话的标签也无损失——下次调用按 `tab_gone` 自动重绑。**残余风险**：其他并发会话若在新对话页里打了草稿还没发送，草稿会随标签一起没（低概率，已知取舍）。手动跑：`node ~/.agents/bin/ab-reap-tabs.mjs [--dry-run]`——**别在会话中途裸跑**（不带保护 env 时不保护调用者自己，会误关自己的标签）。
 
 **`tab_gone` 由 wrapper 自动自愈**：自己钉的 tab 被关掉后，上游报
 `tab_gone: bound tab is gone (…, last url …)`——**exit 1，只写 stderr，且不会更新 `.target`**（不重绑则该会话永久卡死，后续每条命令都失败）。

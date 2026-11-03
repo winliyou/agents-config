@@ -21,6 +21,7 @@ description: 本机环境事实：macOS 路径、已装工具、凭据归档位�
 ## 已装工具与路径
 
 - Android Studio：已安装，自带 JBR；Android SDK 位于 `~/Library/Android/sdk`；gradlew/Gradle 命令需设 `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"` 与 `ANDROID_HOME="$HOME/Library/Android/sdk"`。
+- Gradle：`~/.gradle/gradle.properties` 设了 `org.gradle.daemon=false`——任何走 GRADLE_USER_HOME 的 Gradle 调用默认不留常驻 daemon（构建时 fork 一次性 daemon，`BUILD SUCCESSFUL` 后即停）；确需常驻时命令行 `--daemon` 覆盖。核验：`cat ~/.gradle/gradle.properties`。Kotlin 编译守护进程不受该开关控制，清理规程见 `process-management`。
 - Godot：`/Applications/Godot_mono.app/Contents/MacOS/Godot`（mono 版，含 C# 支持）。
 - DevEco Studio：已安装。
 - Go、Rust、Docker（OrbStack）已安装。
@@ -32,6 +33,7 @@ description: 本机环境事实：macOS 路径、已装工具、凭据归档位�
   `~/Library/Caches/go-build`、`~/Library/Application Support/go`（GOENV 与遥测）已由
   sandbox-extra-roots 放行（desktop profile 已含该条），默认环境直接跑即可；
   报 EPERM 就把该目录加进插件配置（见 `sandbox-adaptation`），不要重定向。
+- ZCode（AI 编码工具，桌面 App + `zcode-cli` 后端）：会话数据在 `~/.zcode/cli/`——模型 IO 在 `rollout/model-io-sess_*.jsonl`（含工具调用的 `"command"` 与请求完成时间）、会话元数据在 `db/db.sqlite` 的 `session` 表（`directory` / `title` / `time_updated` / `last_outcome`）、按天日志 `log/zcode-<日期>.jsonl`；运行进程用 `ps -Ao pid,ppid,command | grep -i zcode` 查看。用于反查「某条命令/构建是谁跑的」。
 
 ## 网络与代理
 
@@ -63,25 +65,31 @@ description: 本机环境事实：macOS 路径、已装工具、凭据归档位�
 
 ## 内存耗尽 → macOS jetsam 批量杀进程
 
-- 症状：近期多个进程被杀（模拟器、浏览器、DSH host 等）。根因：16GB 物理内存耗尽，macOS jetsam（bug_type 298）按内存压力批量 SIGKILL。
-- 证据：`/Library/Logs/DiagnosticReports/JetsamEvent-*.ips`（**现存份数会滚动清理，现查为准**：`ls /Library/Logs/DiagnosticReports/JetsamEvent-*.ips | wc -l`）。`.ips` 第一行是 header JSON，正文从第二行起：`tail -n +2 文件 | python3 -m json.tool`。关键字段：`memoryStatus.memoryPages.free`（现场可能仅 ~5.1–5.5k 页 ×16KB ≈ 80MB）、`compressorSize`（可达 29–39 万页 ≈ 4.5–6GB）；`processes` 按 `rpages` 排序找大户——Emulator 单进程 ~7GB（44% 物理内存），其后 OrbStack Helper ~1.5GB、hdc ~1.2GB、Firefox GPU ~1.1GB、Chrome renderer 每个 0.5–0.9GB。
-- 佐证：模拟器未跑时 `memory_pressure -Q` free 可达 86%。**跑模拟器时叠加 OrbStack + 多浏览器 + 多个 Electron 应用必爆内存**。
-- 深坑：DSH 崩溃日志（`~/Library/Logs/DeepSeek Harness/`）只记录「host stopped」并误把退出瞬间 stderr 尾部（Node ExperimentalWarning、网络报错等）当错误正文，**不含退出 signal/exit code**；判断被杀原因要看 DiagnosticReports（jetsam/.ips/.diag），别在 DSH 日志里找。
-- 附带发现：`DeepSeek Harness_*.diag`（Microstackshots）记录 DSH 单日脏写 2.1GB 文件内存（超 24.86KB/s 限）；`shutdown_stall_*.shutdownStall` 是 spindump 二进制（需 root `spindump -i` 转文本），表示关机时有进程拖住。
+**判据（多个进程同时被杀时按此确认）**：16GB 物理内存耗尽后，macOS jetsam（`bug_type 298`）按内存压力批量 SIGKILL；证据只能从 DiagnosticReports 取，不要从 DSH 日志推断。
+
+- 取证：`/Library/Logs/DiagnosticReports/JetsamEvent-*.ips`（现存份数会被滚动清理，先 `ls /Library/Logs/DiagnosticReports/JetsamEvent-*.ips | wc -l` 取数）。`.ips` 第一行是 header JSON，正文从第二行起：`tail -n +2 <文件> | python3 -m json.tool`。关键字段：`memoryStatus.memoryPages.free`（页数 ×16KB = 可用内存）、`compressorSize`（压缩内存页数，可达数十万页）；`processes` 按 `rpages` 排序找内存大户（Emulator 单进程可达 ~7GB/44% 物理内存，其后是 OrbStack Helper、hdc、Firefox GPU、Chrome renderer）。
+- 复核口径：模拟器未跑时 `memory_pressure -Q` 的 free 百分比应明显回升；**跑模拟器时叠加 OrbStack + 多浏览器 + 多个 Electron 应用是内存耗尽的高危组合**。
+- 陷阱：DSH 崩溃日志（`~/Library/Logs/DeepSeek Harness/`）只记录「host stopped」，并把退出瞬间 stderr 尾部（Node ExperimentalWarning、网络报错等）当错误正文，**不含退出 signal/exit code**；判断被杀原因看 DiagnosticReports（jetsam/.ips/.diag），不要在 DSH 日志里找。
+- DSH 自身产物：`DeepSeek Harness_*.diag`（Microstackshots）记录 DSH 脏写文件内存（超 24.86KB/s 限时产生）；`shutdown_stall_*.shutdownStall` 是 spindump 二进制（需 root `spindump -i` 转文本），表示关机时有进程拖住。
 - 实时排查：`memory_pressure -Q`、`vm_stat`（页大小 16384）、`sysctl vm.swapusage`；沙盒内 `/bin/ps` 会被拦（Operation not permitted），用 `memory_pressure -Q`/`pgrep -fl` 替代。
-- DevEco 模拟器限内存：实例在 `~/.Huawei/Emulator/deployed/`（由 DevEcoStudio26.0 `options/deviceManager.xml` 的 `openharmonyDeployPath` 指向），每实例 `config.ini` 的 `hw.ramSize` + 启动时生成的 `hardware-qemu.ini` 同名字段 + `lists.json` 的 `memoryRamSize` 三处需一致；默认 4096（guest 4GB），host 侧常驻 ≈ guest + ~3GB QEMU/图形开销 ≈ 7GB。本机 5 个实例均为 2048（host 预计 ~5GB）。回退：sed 把 2048 改回 4096 同三处。改后下次冷启动生效，Device Manager 需重启刷新显示。默认设备模板在 `/Applications/DevEco-Studio.app/Contents/tools/emulator/emulator.json`（App 内，勿改）。OrbStack VM 上限 `orbctl config show` 的 `memory_mib`（本机 8192=半机），cap docker 机用 `orbctl config set machine.docker.memory_mib <值>`。
+- DevEco 模拟器限内存：实例在 `~/.Huawei/Emulator/deployed/`（由 DevEcoStudio26.0 `options/deviceManager.xml` 的 `openharmonyDeployPath` 指向），每实例 `config.ini` 的 `hw.ramSize` + 启动时生成的 `hardware-qemu.ini` 同名字段 + `lists.json` 的 `memoryRamSize` 三处需一致；默认 4096（guest 4GB），host 侧常驻 ≈ guest + ~3GB QEMU/图形开销 ≈ 7GB。本机 5 个实例均为 2048（host 预计 ~5GB；现查 `for f in ~/.Huawei/Emulator/deployed/*/config.ini; do grep -H hw.ramSize "$f"; done`）。回退：sed 把 2048 改回 4096 同三处。改后下次冷启动生效，Device Manager 需重启刷新显示。默认设备模板在 `/Applications/DevEco-Studio.app/Contents/tools/emulator/emulator.json`（App 内，勿改）。OrbStack VM 上限 `orbctl config show` 的 `memory_mib`（本机 8192=半机），cap docker 机用 `orbctl config set machine.docker.memory_mib <值>`。
 
-## 鼠标点击无响应排障（Firefox 内点击全灭，hover/键盘正常）
+## 鼠标点击无响应排障（应用内点击全灭，hover/键盘正常）
 
-- 症状：Firefox 内所有位置点击无反应；hover 正常、键盘正常、新标签页能开（父进程健在）。
-- 排除项（每条都有实测证据）：
-  1. 硬件/HID 层正常：CGEventSourceSecondsSinceLastEventType 显示 L-down/L-up 距今仅约 1.2s（用户正在点击），按键未卡（left=0）——物理点击已进入事件层；
-  2. 不是 event tap 拦截：CGGetEventTapList 列出本机全部 5 个 tap 均为 loc=1(Tail) opt=1(ListenOnly)——listen-only 尾部 tap 结构上吞不了事件（ToDesk/通知中心的 tap 属此类；无 loc=0(Head) opt=0 的可拦截 tap）；
-  3. 不是 Firefox 设置/扩展：prefs.js 无 click/mouse/pointer 可疑项、无 user.js、扩展仅 uBlock Origin/Vue devtools。
-- 根因定位在 Firefox 进程内部的事件状态机卡死（唯一干预 = 重启 Firefox 即愈，标签会话原样恢复）。最可能机制二选一（症状一致，事后无法区分，属推测）：① 不可见残留 popup 吃 outside-click——popup 保持 open 态时所有 mousedown 被当作「点弹层外部→关闭弹层」消费掉，不再分发；② 拖拽/滚动条 tracking 丢了 mouseUp 卡住——后续点击全被当作拖拽延续。两者都能解释 hover（走 mouseMoved 管线）与键盘（不走鼠标管线）不受影响。
-- 误判坑：WindowManager 的 Event Shield Window（CGWindowList 可见：layer=-2147483603 桌面图标层、罩满全部显示器、on=1）是常驻窗、不拦截点击——不要把它当嫌疑人：Firefox 重启、点击恢复正常后它依然存在。任何「某窗口拦截点击」的假设，在症状消失后必须回头验证该窗是否仍在，否则会误判。
-- 取证脚本（只读，不注入事件）：~/.agents/skills/local-environment/scripts/macos-input-probe.c，用法：clang 该文件 -o /tmp/input-probe -framework CoreGraphics -framework CoreFoundation 然后运行 /tmp/input-probe（两个 framework 都要链，缺 CoreFoundation 报 undefined symbols）。判读：opt=0 的 tap 才可能拦事件；since_last L-down 远大于用户实际点击间隔 = 点击没进事件层（查硬件/驱动/输入法改键）；点击进了事件层但应用无反应 = 应用内部状态问题（重启该应用）。
-- 修复顺序：① 先判范围——到 Finder/别的应用点一下（确认范围要在动任何东西之前做）：也失效 = 系统级，查 tap 与遮挡窗，可 killall WindowManager / killall NotificationCenter（launchd 会自动拉起），仍不行才重启；只有某应用失效 = 应用内部状态，先 Esc 数次、故意按住再松开左键（清 ghost popup / 补 mouseUp），不行就重启该应用。
+**症状**：某应用内所有位置点击无反应；hover 正常、键盘正常、新标签页能开（父进程健在）。
+
+**判据（按顺序定位，不要跳步）**：
+
+1. **先判范围**：到 Finder/别的应用点一下（动任何东西之前做）。也失效 = 系统级；只有该应用失效 = 应用内部状态。
+2. **系统级**：查 event tap 与遮挡窗——`CGGetEventTapList` 里只有 `opt=0`（Head）的 tap 才可能拦事件，listen-only 尾部 tap 结构上吞不了事件。可 `killall WindowManager` / `killall NotificationCenter`（launchd 会自动拉起），仍不行才重启。
+3. **应用内部状态**：先 Esc 数次、故意按住再松开左键（清 ghost popup / 补 mouseUp），不行就重启该应用（标签会话原样恢复）。
+4. **物理点击是否进事件层**：读 `CGEventSourceSecondsSinceLastEventType`——since_last L-down 远大于用户实际点击间隔 ⇒ 点击没进事件层（查硬件/驱动/输入法改键）；进了事件层但应用无响应 ⇒ 应用内部状态问题（按第 3 条处理）。
+
+**取证脚本（只读，不注入事件）**：`~/.agents/skills/local-environment/scripts/macos-input-probe.c`，用法：`clang 该文件 -o /tmp/input-probe -framework CoreGraphics -framework CoreFoundation` 然后运行 `/tmp/input-probe`（两个 framework 都要链，缺 CoreFoundation 报 undefined symbols）。
+
+**已知机制**（应用内全灭且重启可解）：应用进程内部事件状态机卡死——残留 popup 保持 open 态时 mousedown 被当成「点弹层外部」消费；或拖拽/滚动条 tracking 丢 mouseUp，后续点击被当作拖拽延续。两者都能解释 hover/键盘不受影响。
+
+**误判陷阱**：WindowManager 的 Event Shield Window（`CGWindowList` 可见：`layer=-2147483603` 桌面图标层、罩满全部显示器、on=1）是常驻窗、不拦截点击，不要把它当嫌疑人——任何「某窗口拦截点击」的假设，都要在症状消失后回头验证该窗是否仍在，否则会误判。
 
 ## 各仓库包管理器用料（会漂移，以仓库现状为准）
 
@@ -101,7 +109,7 @@ description: 本机环境事实：macOS 路径、已装工具、凭据归档位�
   上的 WSL2 发行版 Arch Linux（现取 `uname -sr`：6.18.40.1-microsoft-standard-WSL2）；WSL 内网卡 `eth0`
   为 172.20.166.193/20（NAT），**LAN 不能直连 distro 端口**——访问服务一律走 ssh 隧道。账号 liyou、
   shell zsh、sudo 免密；systemd 已启用（pid1=systemd，user manager running），`Linger=yes`
-  （`loginctl enable-linger liyou` 直连被拒 `Could not enable linger: Access denied`，实际用 `sudo loginctl enable-linger liyou` 成功）。
+  （`loginctl enable-linger liyou` 直接执行会报 `Could not enable linger: Access denied`，需 `sudo loginctl enable-linger liyou`）。
 - **Windows 侧网络与拉起**（WSL2 NAT 的补充）：Windows 用 `netsh portproxy` 把 `0.0.0.0:22` 转发到 WSL:22，
   所以 Mac 连 `192.168.2.3:22` 实际是 Windows 宿主转发进 WSL。Windows 计划任务负责登录后拉起并保活 WSL：
   `WSL-Arch-KeepAlive`（At logon，Delay PT30S，动作 `cmd /c wsl.exe -d Arch -u root -- /usr/bin/sleep infinity`，
@@ -166,13 +174,13 @@ description: 本机环境事实：macOS 路径、已装工具、凭据归档位�
 - **凭据**：`~/.dsh/.credentials.yaml`（权限 600、628B，与源机 sha256 一致；refs 为 `OPENCODE_GO_API_KEY`、
   `DEEPSEEK_API_KEY`）。文件型存储由 `dsh-credentials-local` 解析，**不物化进进程环境**；内容只按需使用，
   禁止写入代码/文档/日志。
-- **skills 与全局指令**：`~/.agents/` 已同步（`skill-lint` 在远端 ERROR=0；因 macOS 专属路径在本机不存在会出一批 WARN，属预期；数量现取 `ls ~/.agents/skills | wc -l`）；`~/AGENTS.md` 软链到
+- **skills 与全局指令**：`~/.agents/` 同步后必须跑 `skill-lint`（ERROR=0；macOS 专属路径在远端不存在会出一批 WARN，属预期；skill 数量现取 `ls ~/.agents/skills | wc -l`）；`~/AGENTS.md` 软链到
   `~/.agents/AGENTS.md`（通用指令），`~/.dsh/AGENTS.md` 为本机差异前言（Linux 主机事实）；两个根都会加载、
   同内容去重。工作区级指令：`/home/liyou/workspace/AGENTS.md`（远端工作区约定：无 GUI、项目按需 clone、沙箱/缓存、工具链路径）。技能根是 `~/.agents/skills`（skill-filesystem 的 user-agents rank 500）。
 - **workspace 根**：`/home/liyou/workspace`（systemd WorkingDirectory；当前为空目录，项目需自行 clone/同步到远端）。
 - **重负载卸载（本机用法）**：本机已装 `offload`（`~/.local/bin/offload` → `~/.agents/skills/remote-heavy-offload/scripts/offload.sh`，详见该 skill）：`offload status` 看远端负载；交互式重活用远程 GUI（`ssh -N dsh-arch` + `offload url`，cookie 后书签 `http://127.0.0.1:18765/`）；批处理用 `offload headless '<任务>'`；项目流程 `offload sync ~/work/xxx` → `offload run --dir xxx -- '<构建/测试命令>'` → `offload pull xxx ~/work/xxx`（.git 可闭环，本机 push）。
 - **重负载边界**：远端 8 核 / 8GB，重任务串行、先看 `offload status`；GUI 程序与 Android/DevEco 模拟器不能放远端（WSL2 无 X11、无 `/dev/kvm`）。
-- **远程子代理（MCP，推荐）**：本机 dsh 已通过 `@deepseek-ai/dsh-mcp-client` 挂载 `mcp-remote-subagent`（单文件 bundle + `run.sh` 都在 `~/.agents/skills/remote-heavy-offload/scripts/mcp-server/`，无 node_modules、无需安装；修改 `server.mjs` 后运行该目录 `build.sh` 重新打包）。profile 行已加到 desktop 与 web 两个 `cordis.patch.yml`（改前备份后缀 `.bak-before-mcp`），`command` 指向 skill 内 `run.sh`。资源池允许清单 `~/.dsh/fleet-hosts.json`（默认拒绝未授权主机，当前只有 `exec-arch`）。新会话工具：`mcp__remote__remote_status / remote_start_task / remote_task_status / remote_task_followup / remote_task_cancel / remote_run / remote_diff / remote_sync / remote_pull / remote_jobs`；任务目录在远端 `~/.dsh-offload/jobs/`（`run-N.log` 为 JSON 事件流）。验证：`pgrep -f 'mcp-server/server.bundle.mjs'`、`dsh --profile web --dump-config | grep -A6 mcp-remote-subagent`；改 profile 后需新开会话（app HMR 通常自动加载）。
+- **远程子代理（MCP，推荐）**：本机 dsh 已通过 `@deepseek-ai/dsh-mcp-client` 挂载 `mcp-remote-subagent`（单文件 bundle + `run.sh` 都在 `~/.agents/skills/remote-heavy-offload/scripts/mcp-server/`，无 node_modules、无需安装；修改 `server.mjs` 后运行该目录 `build.sh` 重新打包）。两个 profile 的 `cordis.patch.yml` 都必须含该行（改动前按本地备份约定留副本），`command` 指向 skill 内 `run.sh`。资源池允许清单 `~/.dsh/fleet-hosts.json`（默认拒绝未授权主机，当前只有 `exec-arch`）。新会话工具：`mcp__remote__remote_status / remote_start_task / remote_task_status / remote_task_followup / remote_task_cancel / remote_run / remote_diff / remote_sync / remote_pull / remote_jobs`；任务目录在远端 `~/.dsh-offload/jobs/`（`run-N.log` 为 JSON 事件流）。验证：`pgrep -f 'mcp-server/server.bundle.mjs'`、`dsh --profile web --dump-config | grep -A6 mcp-remote-subagent`；改 profile 后需新开会话（app HMR 通常自动加载）。
 - **资源池**：显式允许清单 `~/.dsh/fleet-hosts.json`（默认拒绝）：`lead`=Mac，`executor`=`exec-arch`（WSL Arch 192.168.2.3，8C/8GB，maxHeavyJobs=1）；排除 `workwork-server`（生产 VPS）、`Ubuntu-YaXin`/`ArchLinux-WuLongTou`（非本人账号 lsyb）、`windows-host`（暂不用 Windows/GPU）。改清单后 MCP 立即生效（文件级校验）。
 - **未部署/待补**：Android Studio / DevEco Studio / VS Code 等 GUI 编辑器与 Android 模拟器不在远端部署范围（CLI 构建链已装：JDK21 + Android SDK + Godot mono）；HarmonyOS 命令行工具（hvigor/ohpm/hdc + 内嵌 SDK）需华为账号登录下载，未装（需要时由用户提供下载包）；gh 未登录；python-pip 未装（用 uv/pipx 替代）。
 - **复核命令**（改本节前先跑，全部只读）：

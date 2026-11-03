@@ -17,8 +17,8 @@ description: HarmonyOS / 鸿蒙真机与模拟器调试通用流程（hdc）：�
 
 ## 模拟器内存占用与实例配置
 
-- **为什么占内存大**（来源：`Emulator -help` 与实例 config.ini）：每个实例是一台完整 QEMU 虚拟机（实例目录 `~/.Huawei/Emulator/deployed/<名称>/`，含 `hardware-qemu.ini`），预置机型 profile（`/Applications/DevEco-Studio.app/Contents/tools/emulator/emulator.json`）的 `memoryRamSize` 模板默认是 **4096**（4 GB）；**本机现有实例为 `hw.ramSize=2048`**（2 GB；模板 4096、5 个实例 config.ini 均 2048），另 4 vCPU（`Emulator -list -details` 与实例 `hardware-qemu.ini`；`Emulator -create` 的 `-memory` 默认值同样是 4 GB）；系统镜像 HarmonyOS 7.0.0 的 system.img 有 3.6 GB。跑起来后 guest 内存大部分被真实占用，再加高分辨率图形缓冲，单实例进程 RSS 轻松 4–6 GB；同时开多个实例乘倍。
-- **预置实例的内存「官方界面改不了，但手工能改」**：Device Manager UI 与 CLI 对 `isCustomize=false` 的预置实例都禁改内存；实配 2048 是靠**直接编辑实例目录下的 `config.ini`（`hw.ramSize`）+ `lists.json`** 实现的——不是 UI 改的。要改预置实例就这么改，别在 UI 里找入口。另：CLI 建新实例可自定内存：
+- **为什么占内存大**（来源：`Emulator -help` 与实例 config.ini）：每个实例是一台完整 QEMU 虚拟机（实例目录 `~/.Huawei/Emulator/deployed/<名称>/`，含 `hardware-qemu.ini`），预置机型 profile（`/Applications/DevEco-Studio.app/Contents/tools/emulator/emulator.json`）的 `memoryRamSize` 模板默认是 **4096**（4 GB）；另 4 vCPU（`Emulator -list -details` 与实例 `hardware-qemu.ini` 可查；`Emulator -create` 的 `-memory` 默认值同样是 4 GB）；系统镜像 HarmonyOS 7.0.0 的 system.img 有 3.6 GB。跑起来后 guest 内存大部分被真实占用，再加高分辨率图形缓冲，单实例进程 RSS 可达 4–6 GB；同时开多个实例乘倍。**本机实例的实际内存档位与配置见 `local-environment` 的「DevEco 模拟器限内存」**。
+- **预置实例的内存「官方界面改不了，但手工能改」**：Device Manager UI 与 CLI 对 `isCustomize=false` 的预置实例都禁改内存；要改就**直接编辑实例目录下的 `config.ini`（`hw.ramSize`）+ `lists.json`**，不要在 UI 里找入口。另：CLI 建新实例可自定内存：
   ```bash
   # -memory 取值 2~32 GB，默认 4；-storage 取值 2~1023 GB，默认 6
   Emulator -create LowMem -deviceType Phone \

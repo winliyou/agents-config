@@ -71,17 +71,17 @@
 ## 二、Gemini 网页常规自动化（默认 headless owner）
 
 
-与上一节的差别：**不需要直连用户日常 Chrome** —— 走 wrapper 默认房客（owner = `profiles/main` headless，登录态已持久），全程零弹窗、零抢焦点。本节所有结论均在本机实测复现。
+与上一节的差别：**不需要直连用户日常 Chrome** —— 走 wrapper 默认房客（owner = `profiles/main` headless，登录态已持久），全程零弹窗、零抢焦点。
 
 **未登录形态（本机现状）**：owner profile 没有登录态时，Gemini 仍能附加图片（缩略图会出现），但附件处理会一直转圈、消息发不出去；且模型只有 Flash-Lite——要 Pro 质量与可靠附件处理，必须先让用户在 `profiles/main` 登录一次。
 
-**参考脚本（可能已被清理）**：某项目 `.workwork/gemini-upload/` 下有 `gemini-image-ask.sh`（同目录 `README.md` 含完整排障笔记）；`.workwork` 属一次性工作产物、随时可能被清，使用前先自行确认文件存在，找不到就按本节坑位与判据自写。用法
-`./gemini-image-ask.sh -f <图片绝对路径> -p "<提示词>" [-o 输出目录] [-n 在当前对话继续]`。
-它内置本节全部坑的规避与重试：可见性置前、CSS 选择器点击、菜单内注入、`naturalWidth` 校验、`textContent` + 停止按钮 + 长度稳定的三重完成判据；单轮约 28-35 秒。
+**参考脚本**：按本节判据自写脚本即可（`.workwork` 属一次性工作产物，脚本随项目存放、不要跨项目引用）。脚本必须内置：可见性置前、CSS 选择器点击、菜单内注入、`naturalWidth` 校验、`textContent` + 停止按钮 + 长度稳定的三重完成判据。
 
-**独立验证结论**：在独立 `AGENT_BROWSER_GLOBAL_SESSION` 实例上端到端 **7/7 成功**（跨两个脚本版本各 3 次 + 1 次"先把标签强制切后台再启动"的自愈测试）。反例也全部如实失败：不点菜单直接 `upload` → `Element not found`；用错 `accept` 选择器 → 同上；传相对路径 → 命令报 `✓ Done` 但 `att=0, has-error=1`（**证实"不能信 upload 的 ✓ Done"**）。用 CDP `Target.activateTarget` 做受控对照可复现，**rAF 节流：前台 91-93 次/1.2s → 后台恒 1 次/1.2s（约 90 倍）**，后台 5/5 轮 `inputs` 恒为 0（即便 `aria-expanded=true`）——本节坑 0 的机制由此确证。
+**判据（自动化必须按此校验，反例必须失败）**：不点菜单直接 `upload` 或 `accept` 选择器写错 → 报 `Element not found`；传相对路径 → 命令报 `✓ Done` 但 `has-error=1`、附件数为 0（**不能信 `upload` 的 ✓ Done**）。后台标签的 rAF 被大幅节流（前台约 75 次/秒、后台约 1 次/秒），菜单内 `input[type=file]` 恒为 0（即便 `aria-expanded=true`）；用 CDP `Target.activateTarget` 做受控对照可复现该差异——所以必须先切前台。
 
-**坑 0 的精确口径**：后台标签时 `[role=menu]` **并非**完全不生成，菜单元素能出现，只是**里面不含 `input[type=file]`**。"input 恒为 0"是硬事实，"菜单 DOM 完全不生成"说得太满。
+**复核方式**：独立 `AGENT_BROWSER_GLOBAL_SESSION` 实例上跑「前台/后台标签各上传一次」对照，后台应报 `Element not found`、前台应成功（附件 `naturalWidth > 0`）。
+
+**坑 0 的精确口径**：后台标签时 `[role=menu]` **并非**完全不生成，菜单元素能出现，只是**里面不含 `input[type=file]`**；判据以 `querySelectorAll('input[type=file]').length === 0` 为准。
 
 ### 模型 + 思考等级切换（选择器一览）
 

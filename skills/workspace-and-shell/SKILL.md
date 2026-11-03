@@ -18,8 +18,8 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 s
 
 ## skill 发现范围与工具默认输出目录
 
-- skill 发现范围（按 DSH `skill-filesystem` 的发现顺序，共 5 个根，优先级从高到低）：项目根的 `.dsh/skills`、项目根的 `.agents/skills`、`$DSH_HOME/skills`（本机默认 `~/.dsh/skills`，当前不存在属正常）、`$DSH_AGENTS_HOME/skills`（本机未设该变量，回退默认 `~/.agents/skills`；**变量名不是 `$AGENTS_HOME`**，asar 内 `AGENTS_HOME_ENV = "DSH_AGENTS_HOME"`）、内置 bundled。`.workwork/` 下的依赖缓存（go-mod、bun caches 等自带 skill）不在发现范围——靠 `.gitignore` 隔离、永不提交；`.claude/skills` 双轨目录不另起一套，一律搬入 `.agents/skills/`。
-  - 本机 `~/.dsh/AGENTS.md` 是指向 `~/.agents/AGENTS.md` 的软链，实际只有一份内容，不要在两处分别维护。
+- skill 发现范围（按 DSH `skill-filesystem` 的发现顺序，共 5 个根，优先级从高到低）：项目根的 `.dsh/skills`、项目根的 `.agents/skills`、`$DSH_HOME/skills`（本机默认 `~/.dsh/skills`，当前不存在属正常）、`$DSH_AGENTS_HOME/skills`（本机未设该变量，回退默认 `~/.agents/skills`；**变量名不是 `$AGENTS_HOME`**，asar 内 `AGENTS_HOME_ENV = "DSH_AGENTS_HOME"`）、内置 bundled。`.workwork/` 下的依赖缓存（go-mod、bun caches 等自带 skill）不在发现范围——靠 `.gitignore` 隔离、永不提交；`.claude/skills` 双轨目录不另起一套，一律搬入项目根的 `.agents/skills` 目录。
+  - 本机 `~/.dsh/AGENTS.md` 经 `~/AGENTS.md` 间接软链到 `~/.agents/AGENTS.md`（`ls -l` 可见链路），内容只有一份，不要在 `~/.dsh/` 下写主机差异；远端主机该文件才是独立文件（见 `remote-agent-env`）。
 - 各 AI 工具（opencode/claude/superpowers/zcode 等）的默认输出目录应配置指向 `.workwork/`；工具的固定路径配置不解除按工作树隔离的义务——在 worktree 内工作时输出仍写入该 worktree 的 `.workwork/`。
 
 ## shell cwd 被删除 → 后续命令全部报 spawn ENOENT
@@ -30,7 +30,7 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 s
 
 ## cwd 跨调用驻留：写文件前先确认目录
 
-- shell 的 cwd 在多次工具调用间保留（实战：容易"以为在 worktree、实际改了主检出"，导致发布产物缺字段）。一切会产生文件改动的操作（内联脚本、`sed -i`、代码生成等）必须先 `cd` 进目标目录或写绝对路径；提交前用 `pwd` + `git status` 确认位置。
+- shell 的 cwd 在多次工具调用间保留：一切会产生文件改动的操作（内联脚本、`sed -i`、代码生成等）必须先 `cd` 进目标目录或写绝对路径；提交前用 `pwd` + `git status` 确认位置，避免以为在 worktree、实际改了主检出。
 
 ## bash 改过的文件会让 edit 工具版本守卫失效
 
@@ -38,8 +38,8 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 s
 
 ## 长文件 read→write 会静默截断
 
-- read 按行分页、超长静默截断（实战踩坑）：超长文件禁止 read→write 整文件往返，写回会静默丢尾（一次可删掉 500+ 行）。改大文件用字节级精确操作（`sed -i` 按行寻址、python 按行替换），改完用 `git diff --numstat`（增删应对称）+ `wc -l` 对 HEAD 验行数一致；一旦失衡立即 `git checkout` 恢复重做，不要在坏文件上继续改。
-  - **这条同样约束 python 脚本里的 `read_text()` → `replace()` → `write_text()`**：那不是"按行替换"而是整文件往返，照样截断（例：一个 585 行的文件写回后 `git diff` 报 106 增 / **585 删**，而改动本身只有 12 行；同一次脚本里改的另一个文件甚至没落盘）。**首选做法：长文件一律用 edit 工具（自带版本守卫）逐处改**；必须用脚本时只在**短文件**上用，且写盘后立刻 `git diff --numstat` 自检，失衡就 `git checkout -- <file>` 重来。
+- read 按行分页、超长静默截断：超长文件禁止 read→write 整文件往返，写回会静默丢尾。改大文件用字节级精确操作（`sed -i` 按行寻址、python 按行替换），改完用 `git diff --numstat`（增删应对称）+ `wc -l` 对 HEAD 验行数一致；一旦失衡立即 `git checkout` 恢复重做，不要在坏文件上继续改。
+  - **这条同样约束 python 脚本里的 `read_text()` → `replace()` → `write_text()`**：那不是「按行替换」而是整文件往返，照样截断（表现为 diff 里出现上百行删除，而实际改动只有几行；同一次脚本里改的其他文件可能根本没落盘）。**首选做法：长文件一律用 edit 工具（自带版本守卫）逐处改**；必须用脚本时只在**短文件**上用，且写盘后立刻 `git diff --numstat` 自检，失衡就 `git checkout -- <file>` 重来。
   - 判别信号：意图只有几行改动，`git diff --stat` 却出现几十/几百行删除 —— 立即停下核对，别在该文件上继续叠加改动。
 
 ## macOS 自带 bash 3.2 的多字节变量名解析坑
@@ -52,7 +52,7 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 s
 
 在编程语言模板字符串里写 bash 是高频事故源，写之前过此清单：
 
-1. **bash 的「美元符+花括号」序列一律转义后写入**——含参数展开、默认值等一切形式，否则被模板引擎当插值解析，报 Unexpected token（一处参数展开未转义即可致整个程序解析失败，连带审批等待超时烧掉 12 分钟）。写完目测一遍有无裸序列；**更稳的做法：复杂 bash 片段独立落盘为脚本文件再执行，或在 TS 中改用单引号字符串数组（反引号与美元花括号均无需转义），heredoc 尽量避免**。
+1. **bash 的「美元符+花括号」序列一律转义后写入**——含参数展开、默认值等一切形式，否则被模板引擎当插值解析，报 Unexpected token（一处参数展开未转义即可致整个程序解析失败）。写完目测一遍有无裸序列；**更稳的做法：复杂 bash 片段独立落盘为脚本文件再执行，或在 TS 中改用单引号字符串数组（反引号与美元花括号均无需转义），heredoc 尽量避免**。
 2. **模板串内嵌 markdown 行内代码的反引号会提前终止字符串**——报 missing required property 或 Expression expected。要么全部转义，要么改用单引号字符串。
 3. **edit 的 old_string 从 read 输出原样复制**，禁止凭记忆重打——全角/半角标点（半角逗号 vs 全角逗号、半角冒号 vs 全角冒号）差异必致匹配失败。
 4. **bash 片段改完立即 bash -n 语法检查再投入使用**；重要脚本过 shellcheck（本机 0.11.0，`shellcheck -S style <file>`）。
@@ -63,7 +63,7 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 s
 2. grep 模式以 `-` 开头必须 `grep -e` 加模式（或 `--` 分隔）——`->` 前缀会报 invalid option，端口自愈链因此失效。
 3. grep 多 pattern 用多个 `-e`（或 ERE 的 `|`）：`\|` 的正则方言不一致——默认 BRE 下是 alternation，`grep -E` 与 DSH grep 工具（ripgrep）下是字面量 `|`，会整段漏匹配（系统 BSD grep 的 `\|` 两分支均命中；`grep -E 'a\|b'` 与 ripgrep 均 0 命中），据此会误判「文件未修改」。
 4. **统计进程/对象禁止按命令行关键词 grep 计数**：daemon 进程名统一（如 agent-browser-darwin），按 session 名 grep 恒为数 0（实际 2 个）；按「Google Chrome」计数把用户日常浏览器混进来（误报双实例）。用 `lsof -p <pid>` 看 fd/sock 归属，或 `pgrep -f 完整特征串`。
-5. **清理类操作禁止盲删「非当前/非自己的」对象**（按「除第一个外全关」清理 tab，若那些不是死残留而是活跃会话的 tab，就是事故重演）。先甄别归属，只删确属自己或确认已死的。
+5. **清理类操作禁止盲删「非当前/非自己的」对象**（如按「除第一个外全关」清理 tab，若那些不是死残留而是活跃会话的 tab，就会误关活跃页面）。先甄别归属，只删确属自己或确认已死的。
 6. 管道后 `$?` 是末命令的退出码；要真实退出码先落盘（`cmd > log` 后 `echo $?`）或用 PIPESTATUS。
 7. **消费第三方 CLI 的参数分隔/解析规则先实测再依赖**：README 写「comma or newline separated」，agent-browser 0.38.2 换行不生效、逗号硬拆——含逗号的值（如 Chrome `--window-position=x,y`）经此通道必然损坏，残尾数字被 Chrome 当整数 IP URL（即「0.0.3.32 tab」现象，0.0.3.32 = 整数 800）。产品侧细节见 `browser-automation-safety` skill。
 

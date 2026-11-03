@@ -5,7 +5,7 @@ description: 把高负载/消耗性能的任务从 macOS 丢到远程 Linux 主�
 
 # 远程重负载卸载（Remote Heavy Offload）
 
-把**重活**放到远程 Linux（192.168.2.3，Arch on WSL2）执行，macOS 只留浏览器/终端/隧道。
+把**重活**放到远程 Linux（Arch on WSL2）执行，macOS 只留浏览器/终端/隧道。主机地址/账号/端口/路径等事实见 `local-environment`。
 
 主机事实（IP、端口、systemd unit、路径、凭据位置）见 `local-environment` skill 的「远程开发主机」一节；本文只写可复用流程。
 环境本身怎么迁移/部署见 `remote-agent-env` skill。
@@ -32,30 +32,27 @@ description: 把高负载/消耗性能的任务从 macOS 丢到远程 Linux 主�
                                       └── 任务目录在远端 ~/.dsh-offload/jobs/<job>/
 ```
 
-### 资源池 v1（当前：单执行器）
+### 资源池（显式允许清单，默认拒绝）
 
 资源池遵循**显式允许清单、默认拒绝**：可访问 ≠ 可调度。清单文件 `~/.dsh/fleet-hosts.json`（MCP server 每次调用都会校验，未授权主机直接报错、不会尝试 ssh）。
 
 | 角色 | 主机 | 说明 |
 |---|---|---|
-| lead | Mac M1（本机） | 规划/审阅/GUI 验证/凭据/发布，不跑重负载 |
-| executor | `exec-arch`（WSL Arch，192.168.2.3） | 唯一执行器；8C/8GB，Linux 构建测试/Docker/Android CLI/Godot/无头浏览器 |
+| lead | 本机 Mac | 规划/审阅/GUI 验证/凭据/发布，不跑重负载 |
+| executor | 远端 Linux 主机（WSL2 Arch） | 执行器；具体规格见 `local-environment` 远程主机节 |
 
-明确排除（已写入清单 `excluded`，不要在未确认时加入）：
-- `workwork-server`（生产 VPS：4 套服务/15 容器，禁止跑构建）；
-- `Ubuntu-YaXin` / `ArchLinux-WuLongTou`（非本人账号 lsyb，且不可达）；
-- `windows-host`（暂不使用 Windows 侧与 GPU，只用其 WSL 发行版）。
+**机器事实（主机名、地址、账号、允许/排除清单、资源上限）统一见 `local-environment` 的「远程开发主机」与「资源池」两节**，本 skill 不复制。
 
 **并发保护**：每个执行器默认最多 1 个重任务（`limits.maxHeavyJobs`）。第二个 `remote_start_task` 会被拒绝并提示已有任务；确需并行才传 `force:true`。`remote_task_followup` 同样检查其他运行中任务。
 
 **job 名规范化**：start 返回 `job-xxx`；`status/followup/cancel/diff` 传 `xxx` 会自动补 `job-` 前缀。
 
-未来加主机（按需、需明确授权）：在 `fleet-hosts.json` 的 `hosts` 增加一条（含 ssh/role/limits/authorized=true），再给本地 profile 加一行 MCP 配置即可，无需改 MCP 代码。
+加主机（按需、需明确授权）：在 `fleet-hosts.json` 的 `hosts` 增加一条（含 ssh/role/limits/authorized=true），再给本地 profile 加一行 MCP 配置即可，无需改 MCP 代码。
 
 ### 启用（无需安装，全部在 skill 内）
 
 MCP server 以**单文件 bundle** 形式放在 skill 目录，profile 的 `command` 直接指向该目录的 `run.sh`：
-`/Users/liyou/.agents/skills/remote-heavy-offload/scripts/mcp-server/run.sh`
+`~/.agents/skills/remote-heavy-offload/scripts/mcp-server/run.sh`
 
 把 `scripts/mcp-server/profile-row.yml` 的内容追加到目标 profile 的 `cordis.patch.yml` 末尾
 （`~/.dsh/profiles/desktop/cordis.patch.yml` 与/或 `~/.dsh/profiles/web/cordis.patch.yml`），
@@ -84,14 +81,14 @@ MCP server 以**单文件 bundle** 形式放在 skill 目录，profile 的 `comm
 
 ```
 # 1) 派活（异步，立即返回 job，本地不阻塞）
-remote_start_task({task: "跑 dsh-plugins 全量测试，定位失败并给出修复建议", project: "dsh-plugins", name: "test-run"})
+remote_start_task({task: "跑 <项目> 全量测试，定位失败并给出修复建议", project: "<项目>", name: "test-run"})
 # 2) 轮询
 remote_task_status({job: "test-run"})            # running / done / failed
 # 3) 一次没解决就继续追问（同一会话）
 remote_task_followup({job: "test-run", task: "按你的分析修复并重跑，把 commit hash 给我", wait_sec: 900})
 # 4) 必要时取消 / 取回产物
 remote_task_cancel({job: "test-run"})
-remote_pull({remote_name: "dsh-plugins", local_path: "~/work/dsh-plugins"})
+remote_pull({remote_name: "<项目>", local_path: "~/work/<项目>"})
 ```
 
 - 并行任务用不同 `name` 各开 job；同一 job 内是顺序续接，不会并发。
@@ -128,7 +125,7 @@ remote_pull({remote_name: "dsh-plugins", local_path: "~/work/dsh-plugins"})
 
 ```
 # lead 视角：一次完整的「远端改 → 本地审 → 本地验证」
-remote_start_task({task: "修复 xxx 的 3 个失败用例，改完在远端 bun test 通过", project: "dsh-plugins", name: "fix-tests"})
+remote_start_task({task: "修复 <项目> 的失败用例，改完在远端 bun test 通过", project: "<项目>", name: "fix-tests"})
 remote_task_followup({job: "fix-tests", task: "还差一个用例，继续修", wait_sec: 600})
 remote_diff({job: "fix-tests"})             # 拿 patch + 文件列表
 # 本地：git apply 该 patch → 本地跑一次快速检查/需要 GUI 的验证 → git commit
@@ -163,12 +160,12 @@ pgrep -f 'mcp-server/server.bundle.mjs' | wc -l     # >0 说明 MCP server 已�
 本机只跑浏览器 + ssh 隧道：
 
 ```bash
-ssh -N dsh-arch                        # 已配 LocalForward 18765 -> 远端 8765；约 5s 起
-offload.sh url                         # 打印带 token 的 URL（已改写成本地 18765；含凭据，勿外传）
-# 浏览器打开该 URL；换取 cookie 后（30 天有效，跨重启）可直接书签 http://127.0.0.1:18765/
+ssh -N <别名>                          # 别名与 LocalForward 见 local-environment（机器事实）
+offload.sh url                         # 打印带 token 的 URL（已改写成本地转发端口；含凭据，勿外传）
+# 浏览器打开该 URL；换取 cookie 后（30 天有效、跨重启）可直接书签本地转发地址
 ```
 
-- 首次打开是「选择工作区」：选 `/home/liyou/workspace` 或其下项目目录；之后的 agent 会话、构建、文件操作全在远端。
+- 首次打开是「选择工作区」：选远端 workspace 根或其下项目目录（路径见 `local-environment`）；之后的 agent 会话、构建、文件操作全在远端。
 - 本机不要同时再开一个重的本地 dsh 会话做同一件事，否则本机照样卡。
 
 ### B. headless 批处理（后台长任务，无需浏览器）
@@ -177,8 +174,8 @@ offload.sh url                         # 打印带 token 的 URL（已改写成�
 offload.sh headless '把 workspace 下 xxx 项目跑一遍测试并把失败用例整理出来'
 ```
 
-- 等价于远端 `cd /home/liyou/workspace && dsh headless "<task>"`；结果打印到本机终端。
-- 要后台跑更久：`offload.sh run -- 'tmux new -d -s job "cd xxx && bun test > /tmp/job.log 2>&1"'`，之后 `ssh liyou@192.168.2.3 'tmux attach -t job'`。
+- 等价于远端 `cd <远端 workspace> && dsh headless "<task>"`（路径见 `local-environment`）；结果打印到本机终端。
+- 要后台跑更久：`offload.sh run -- 'tmux new -d -s job "cd xxx && bun test > /tmp/job.log 2>&1"'`，之后 `ssh <别名> 'tmux attach -t job'`。
 
 ### C. 混合：本机编辑 + 远端执行
 
@@ -191,13 +188,13 @@ offload.sh headless '把 workspace 下 xxx 项目跑一遍测试并把失败用�
 
 ```bash
 # 终端交互式多轮（推荐用于排查/迭代；默认续接同名会话，/new 开新会话，/exit 退出）
-offload.sh chat --dir dsh-plugins
+offload.sh chat --dir <项目>
 
 # 脚本/非交互续接：每次 ask 都在同一会话里继续（默认会话名 default）
-offload.sh ask --dir dsh-plugins -- '先跑一遍测试，把失败项列出来'
-offload.sh ask --dir dsh-plugins -- '按你列的失败项修复，然后重新跑测试'
-offload.sh ask --dir dsh-plugins -- '把刚才的修复提交，并给我 commit hash'
-offload.sh ask --dir dsh-plugins --new -- '换个话题：从零分析这个仓库'   # --new 丢掉旧上下文
+offload.sh ask --dir <项目> -- '先跑一遍测试，把失败项列出来'
+offload.sh ask --dir <项目> -- '按你列的失败项修复，然后重新跑测试'
+offload.sh ask --dir <项目> -- '把刚才的修复提交，并给我 commit hash'
+offload.sh ask --dir <项目> --new -- '换个话题：从零分析这个仓库'   # --new 丢掉旧上下文
 
 # 查看本机保存的会话（名称/目录/session id）
 offload.sh sessions
@@ -220,12 +217,12 @@ offload.sh sessions
 offload.sh sync <本地项目目录>
 # 2) 让远端 agent 或命令在远端工作区干活
 offload.sh run --dir myproj -- 'bun install && bun run build && bun test'
-offload.sh headless '在 /home/liyou/workspace/myproj 跑全部测试，修复可复现的失败并提交'
+offload.sh headless '在远端 workspace/myproj 跑全部测试，修复可复现的失败并提交'
 # 3) 取回远端产物/提交（.git 一起同步回来，本机再 push）
 offload.sh pull myproj <本地项目目录>
 ```
 
-- `sync/pull` 默认走 tar 管道（macOS 自带 openrsync 与远端 rsync 3.5.1 不兼容，不要用 rsync）。
+- `sync/pull` 默认走 tar 管道（macOS 自带 openrsync 与远端新版 rsync 协议不兼容，不要用 rsync；机制见 `remote-agent-env`）。
 - 远端 agent 在 `myproj` 里 commit 后，`pull` 会把 `.git` 一起带回来，本机 `git push` 即可（远端不配凭据也能闭环）。
 - 公开仓库更省事：直接在远端 `offload.sh run -- 'git clone <url> myproj'`。
 
@@ -245,12 +242,11 @@ offload.sh chat [--name N] [--dir 子目录] [--new]     # 终端多轮对话（
 offload.sh sessions                     # 列出本机保存的远端会话
 ```
 
-可用环境变量覆盖：`OFFLOAD_HOST`（默认 `dsh-arch`）、`OFFLOAD_LOCAL_PORT`（18765）、
-`OFFLOAD_REMOTE_WORKSPACE`（`/home/liyou/workspace`）、`OFFLOAD_DSH`（`/home/liyou/.local/bin/dsh`）。
+可用环境变量覆盖：`OFFLOAD_HOST`、`OFFLOAD_LOCAL_PORT`、`OFFLOAD_REMOTE_WORKSPACE`、`OFFLOAD_DSH`；默认值取 `local-environment` 记录的机器事实（或脚本顶部的默认定义）。
 
 ## 资源与安全边界
 
-- 远端只有 8 核 / 8GB（`.wslconfig` 固定），**别把本机所有活一次性怼上去**；重任务串行或先看 `offload.sh status`。
+- 远端 CPU/内存规格有限（见 `local-environment`），**别把本机所有活一次性怼上去**；重任务串行或先看 `offload.sh status`。
 - 超长任务放 `tmux`/后台 job；SSH 断了任务不会停（agent 会话由远端服务管，window/tunnel 断了重连即可）。
 - 隧道只在需要时开，用完 `offload.sh tunnel --stop`（或直接 Ctrl-C）；不要在后台长期留多个 `ssh -N`。
 - token/cookie 按凭据处理：URL 含一次性 token，不写文档/聊天；cookie 固定 authority 有效，可书签。
@@ -260,8 +256,8 @@ offload.sh sessions                     # 列出本机保存的远端会话
 
 ```bash
 offload.sh tunnel --stop                      # 关隧道
-ssh liyou@192.168.2.3 'tmux kill-server 2>/dev/null; pgrep -af "dsh headless" | head'   # 关遗留任务/进程
-ssh liyou@192.168.2.3 'docker ps'             # 远端容器按需清理
+ssh <别名> 'tmux kill-server 2>/dev/null; pgrep -af "dsh headless" | head'   # 关遗留任务/进程
+ssh <别名> 'docker ps'             # 远端容器按需清理
 ```
 
 ## 已知限制
