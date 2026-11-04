@@ -89,7 +89,9 @@ skill-lint --with-third-party # 连第三方 skill 一起查（默认跳过）
 ```
 
 检测：frontmatter 缺失（DSH 会静默忽略该 skill）、description 超 500 字符（目录截断丢触发词）、
-引用路径不存在、引用不存在的 skill 名、正文出现日期标注、项目级孤儿 skill（无任何 Markdown 提及）。
+引用路径不存在、引用不存在的 skill 名、正文出现日期标注、项目级孤儿 skill（无任何 Markdown 提及）、
+**归属**（用户级 skill 出现项目名或 `~/work` 路径；项目级 skill 无项目锚点）。
+归属检查只抓显式痕迹，「已泛化但仍是单项目架构」的内容需人工判断。
 
 退出码 0 = 无 ERROR。**每次新增或大改 skill 后建议跑一次**；ERROR 必修，WARN 逐条判断
 （「路径不存在」在说明某文件本机未配置时属正确描述，脚本已对含「不存在/未配置」的行豁免）。

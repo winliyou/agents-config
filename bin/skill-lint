@@ -16,6 +16,8 @@
 #
 # 文档写法：正文日期、变更记录/更新日志/时间线/踩坑记录类章节 = ERROR；
 #           变更史式短语（已作废/修复前/旧文…）= WARN。代码块与文件名中的日期除外。
+# 归属：用户级 skill 出现项目名或 ~/work 路径 = WARN（项目知识应写项目侧）；
+#       项目级 skill 正文无项目锚点 = WARN（确认是否该上提用户级）。
 # 退出码：0 = 无 ERROR（可能有 WARN）；1 = 有 ERROR。
 set -uo pipefail
 
@@ -65,6 +67,14 @@ if [ "$ALL" -eq 1 ]; then
       -not -path "*/node_modules/*" -not -path "*/.worktrees/*" -not -path "*/.workwork/*" 2>/dev/null | sort -u)
 fi
 [ ${#ROOTS[@]} -eq 0 ] && ROOTS=("$HOME/.agents/skills")
+
+# ---- 本机项目名（归属检查用：用户级 skill 不得绑定具体项目）----
+WORK_NAMES=""
+while IFS= read -r _wd; do
+  _wb="$(basename "$_wd")"
+  case "$_wb" in .*) continue ;; esac
+  WORK_NAMES="$WORK_NAMES$_wb"$'\n'
+done < <(find "$HOME/work" -maxdepth 1 -mindepth 1 -type d 2>/dev/null)
 
 errors=0
 warns=0
@@ -252,6 +262,53 @@ PYEOF
     for ref in "$dir"references/*.md; do
       [ -f "$ref" ] && doc_check "$ref" "$name" "$phrases"
     done
+
+    # ---- 5b. 归属检查：默认项目侧；用户级 skill 不得绑定具体项目 ----
+    #      lint 只能抓显式痕迹（项目名/路径）；「已泛化但仍是单项目架构」需人工判断。
+    case "$root" in
+      "$HOME/.agents/skills"|"$HOME/.dsh/skills")
+        if [ "$name" != "local-environment" ]; then
+          for chk in "$f" "$dir"references/*.md; do
+            [ -f "$chk" ] || continue
+            while IFS= read -r hit; do
+              [ -z "$hit" ] && continue
+              emit WARN "$name" "用户级 skill 出现项目工作区路径（项目知识应写项目侧）：$hit"
+            done < <(grep -nE '(~|\$HOME)/work/|/Users/[^/]+/work/' "$chk" 2>/dev/null | grep -v '<' | cut -c1-120)
+            while IFS= read -r pn; do
+              [ -z "$pn" ] && continue
+              [ ${#pn} -lt 5 ] && continue
+              hit=$(grep -nE "(^|[^A-Za-z0-9_.-])${pn}([^A-Za-z0-9_-]|$)" "$chk" 2>/dev/null | head -1 | cut -c1-120)
+              [ -n "$hit" ] && emit WARN "$name" "用户级 skill 出现项目名「$pn」（项目知识应写项目侧）：$hit"
+            done <<< "$WORK_NAMES"
+          done
+        fi
+        ;;
+      *)
+        # 项目级：正文既无项目名也无项目内真实路径 → 可能该上提用户级
+        proj="$(dirname "$(dirname "$root")")"
+        pname="$(basename "$proj")"
+        anchor=0
+        grep -qiF -- "$pname" "$f" 2>/dev/null && anchor=1
+        if [ "$anchor" -eq 0 ]; then
+          # 项目顶层条目名也算锚点（排除 docs/src 之类通用目录名，避免误判）
+          while IFS= read -r _e; do
+            _b="$(basename "$_e")"
+            case " docs doc src lib libs test tests scripts script public assets config configs cmd internal pkg web frontend backend node_modules bin deploy dist api app apps examples example README.md AGENTS.md CHANGELOG.md LICENSE package.json Makefile " in *" $_b "*) continue ;; esac
+            [ ${#_b} -ge 4 ] || continue
+            grep -qF -- "$_b" "$f" 2>/dev/null && { anchor=1; break; }
+          done < <(find "$proj" -maxdepth 1 -mindepth 1 -not -name '.*' 2>/dev/null)
+        fi
+        if [ "$anchor" -eq 0 ]; then
+          while IFS= read -r tok; do
+            [ -z "$tok" ] && continue
+            t="${tok#./}"
+            case "$t" in *'<'*|*'>'*|*'*'*|*'--'*|*' '*) continue ;; esac
+            if [ -e "$proj/$t" ] || [ -e "$proj/${t%%/*}" ]; then anchor=1; break; fi
+          done < <(grep -ohE '\`[^\`]+\`' "$f" 2>/dev/null | tr -d '\`' | sed 's/[.,:;()（）「」]*$//' | sort -u)
+        fi
+        [ "$anchor" -eq 0 ] && emit WARN "$name" "项目级 skill 未出现本项目名或项目内真实路径（确认是否该上提用户级）"
+        ;;
+    esac
 
   done
 done
