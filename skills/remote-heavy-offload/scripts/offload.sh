@@ -95,7 +95,9 @@ cmd_sync() {
     --exclude './node_modules' --exclude './.gradle' --exclude './build' --exclude './target' \
     --exclude './dist' --exclude './.next' --exclude './.venv' --exclude './venv' \
     --exclude './.DS_Store' --exclude './.workwork' --exclude './.worktrees' \
+    --exclude './.agents/worktrees' \
     --exclude '*/node_modules' --exclude '*/.workwork' --exclude '*/.worktrees' \
+    --exclude '*/.agents/worktrees' \
     --exclude '*/dist' --exclude '*/build' --exclude '*/target' ${extra[@]+"${extra[@]}"} . 2>/dev/null | \
     "${SSH[@]}" "mkdir -p '$target' && tar -C '$target' -xf -" || die "sync 失败"
   "${SSH[@]}" "cd '$target' && printf 'remote: '; du -sh . | cut -f1; git rev-parse --short HEAD 2>/dev/null || echo 'git: none'"

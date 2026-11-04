@@ -64,7 +64,7 @@ is_third_party() {
 if [ "$ALL" -eq 1 ]; then
   ROOTS+=("$HOME/.agents/skills")
   while IFS= read -r d; do ROOTS+=("$d"); done < <(find "$HOME/work" -maxdepth 5 -type d -path "*/.agents/skills" \
-      -not -path "*/node_modules/*" -not -path "*/.worktrees/*" -not -path "*/.workwork/*" 2>/dev/null | sort -u)
+      -not -path "*/node_modules/*" -not -path "*/.worktrees/*" -not -path "*/.agents/worktrees/*" -not -path "*/.workwork/*" 2>/dev/null | sort -u)
 fi
 [ ${#ROOTS[@]} -eq 0 ] && ROOTS=("$HOME/.agents/skills")
 
@@ -319,7 +319,7 @@ if [ "$ALL" -eq 1 ]; then
   while IFS= read -r ag; do
     [ -f "$ag" ] || continue
     doc_check "$ag" "(agents)" 0
-  done < <(find "$HOME/work" -maxdepth 3 -name 'AGENTS.md'       -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.worktrees/*' -not -path '*/.workwork/*' 2>/dev/null | sort -u)
+  done < <(find "$HOME/work" -maxdepth 3 -name 'AGENTS.md'       -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.worktrees/*' -not -path '*/.agents/worktrees/*' -not -path '*/.workwork/*' 2>/dev/null | sort -u)
 fi
 
 # ---- 6. 孤儿 skill：项目级 skill 未被项目 AGENTS.md 索引（AI 很难发现它）
@@ -337,7 +337,7 @@ for root in "${ROOTS[@]}"; do
     n="$(basename "$dir")"
     # 索引口径：项目根下任意 Markdown（AGENTS.md / RELEASING.md / README.md …）提到即算有入口
     # 索引口径：项目根顶层 Markdown + 任意层 AGENTS.md（覆盖 RELEASING.md / README.md / 子目录 AGENTS.md）
-    if grep -qF -- "$n" "$proj"/*.md 2>/dev/null        || find "$proj" -maxdepth 4 -name 'AGENTS.md' -not -path '*/node_modules/*'             -not -path '*/.git/*' -not -path '*/.worktrees/*' -not -path '*/.workwork/*'             -exec grep -qF -- "$n" {} + 2>/dev/null; then
+    if grep -qF -- "$n" "$proj"/*.md 2>/dev/null        || find "$proj" -maxdepth 4 -name 'AGENTS.md' -not -path '*/node_modules/*'             -not -path '*/.git/*' -not -path '*/.worktrees/*' -not -path '*/.agents/worktrees/*' -not -path '*/.workwork/*'             -exec grep -qF -- "$n" {} + 2>/dev/null; then
       continue
     fi
     emit WARN "$n" "孤儿 skill：项目内任何 Markdown 都未提及（AI 很难发现它）"

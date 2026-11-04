@@ -9,7 +9,7 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 
 - 禁止改写 main/master 历史（限主工作树/main 分支）：reset --hard、push --force、rebase；分支内整理历史（rebase/reset）一律在 Worktree 中进行，见下。
 - 合并统一使用 `git merge --ff-only`，禁止 Merge Commit。
-- **仅当需要更改项目文件（修改/新增/删除代码、配置、文档等会产生提交的操作；单文件、typo、简单 bugfix 等无例外）时才新建 Worktree**：开发分支必须通过 `git worktree add` 独占目录创建，严禁在主工作树上修改/提交代码或 `git checkout -b` / `git switch -c` 切分支。
+- **仅当需要更改项目文件（修改/新增/删除代码、配置、文档等会产生提交的操作；单文件、typo、简单 bugfix 等无例外）时才新建 Worktree**：开发分支必须通过 DSH `create_worktree` 工具（或等价的 `git worktree add`）独占目录创建，目录统一为项目根 `.agents/worktrees/<分支名>`，严禁在主工作树上修改/提交代码或 `git checkout -b` / `git switch -c` 切分支。
 - 只读类操作（代码梳理、架构调研、阅读/检索代码、运行不产生文件改动的命令等）不需要新建 Worktree，直接在主工作树进行。
 - 主工作树允许的操作：`git fetch`、`git pull --ff-only`、`git merge --ff-only`、`git push`（推送合并后的 main）、发版 tag（`git tag` 打在合并后的 main 上再推送）、`git worktree add|list|remove`、`git branch -d`（清理已合并分支）以及只读命令（`status`/`log`/`diff`/`show`/`describe`…）。
 - 主工作树禁止的 git 写操作：`commit`、`checkout`、`switch`、`reset`、`rebase`、`cherry-pick`、`stash`、非 `--ff-only` 的 `merge`、新建/改名/非 `-d` 删除的 `branch`、推送非主干分支（见下条）。
@@ -18,7 +18,7 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 - **修复敏感性验证（改坏 → 断言失败 → 恢复）的恢复步骤用 `cp` 备份，禁止用 `git checkout <file>` / `git restore <file>` 撤销探测**：探测点尚未提交时，这两条命令会把文件回退到 HEAD，直接丢掉本次全部改动（只能整份重做编辑）。恢复统一写 `cp /tmp/<name>.bak <file>`，并在探测后 `git diff --stat` 确认改动仍在。
 - 探测脚本要保证「编译通过但行为退化」，否则 build failed 会掩盖真正的断言失败（例：把参数改成空串时顺手留下未使用变量 → Go 报 declared and not used，看不到测试断言）。
 - 每条并行线一个 Worktree，互不干扰；Worktree 内可自由 rebase/reset/amend 整理历史。
-- Worktree 位置：项目根 `.worktrees/<分支名>`（已 gitignore），避免污染主仓库 git status；基线除非用户指定，一律基于本地主分支创建（`git worktree add -b <分支名> .worktrees/<分支名> main`），创建前确认主分支已同步到最新。
+- Worktree 位置：项目根 `.agents/worktrees/<分支名>`（DSH worktree 插件默认目录，池由插件创建时自带 `*` 忽略文件；手工 `git worktree add` 且池无忽略文件时，先把 `.agents/worktrees/` 加入 `.gitignore` 或 `.git/info/exclude`）。优先用 DSH `create_worktree({ name, from: 'main' })`——新建分支、创建检出、把会话 cwd 切进去一步完成；等价命令为 `git worktree add -b <分支名> .agents/worktrees/<分支名> main`。基线除非用户指定，一律基于本地主分支创建，创建前确认主分支已同步到最新。
 
 ## 合并流程（合并后清理）
 
@@ -26,11 +26,12 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 2. 按「完成前验证」过完全部检查（format、lint、test、build）。
 3. 主分支 `git merge --ff-only <分支>` 合并完成后，**自动删除该 Worktree 与已合并分支**，无需询问用户：
    - 若该 worktree 启动过 compose 环境，先清理其 compose 资源；
-   - `git worktree remove .worktrees/<分支名>`，再 `git branch -d <分支名>`（必须先 remove 再 -d，分支被 worktree 占用时无法删除；可先 `git branch --merged main` 做防御性确认）；
+   - 用 `create_worktree` 进入过工作树的会话，先把工作目录切回主工作树（`working_directory({ cd: <项目主树> })` 或 shell `cd`），再执行删除——cwd 悬空会让后续命令报 `spawn /bin/zsh ENOENT`（见 `workspace-and-shell` skill）；
+   - `git worktree remove .agents/worktrees/<分支名>`，再 `git branch -d <分支名>`（必须先 remove 再 -d，分支被 worktree 占用时无法删除；可先 `git branch --merged main` 做防御性确认）；
    - 若 `worktree remove` 因存在未跟踪文件失败，先检查是否为需要保留的产物（`.workwork/` 中间产物默认可丢弃），再决定是否 `--force`。
 4. 推送在主工作树进行：`git push`（推送合并后的 main）；发版 tag 打在合并后的 main 上再推送。Worktree 内的 commit 不直接 push，开发分支也不推远程建立跟踪——只有合并进主分支的更改才推送。
 5. **改动必须写在 worktree 内的路径上**：会话 cwd 是主工作树，edit/write 工具按该 cwd 解析相对路径——在 worktree 会话里用「主树路径 / 无前缀相对路径」改文件，会把改动落在**主检出**；随后在 worktree 内 `git commit` 得到 `nothing to commit`（改动仍在主树未提交，且 worktree 一旦删除，主树那份就成了游离改动）。规则：
-   - 动手前 `pwd` 确认；改文件一律用 **worktree 绝对路径**（`<repo>/.worktrees/<name>/...`）；
+   - 动手前 `pwd` 确认；改文件一律用 **worktree 绝对路径**（`<repo>/.agents/worktrees/<name>/...`）；
    - `git add -A` 后先看 `git status --short` 与 `git diff --stat` **非空**再 commit；空则立刻查是不是改到了主树；
    - 已经改错时：把主树那份改动复制进 worktree 正常提交，然后 `git checkout -- <path>` 还原主树（**不要**在主树提交——那是 Git 红线），并在提交信息里如实记录。
    - **验证侧的对称坑**：worktree 改完后，所有核对命令（`git status`/`git diff`/`grep`/`sed`）若不带 workdir/`cd`，看到的是**主树**——会把已完成的改动误判为「没生效」，也会把主树的旧内容误当 worktree 现状，来回排查浪费时间。规则：worktree 会话里每条核对命令都必须显式带 workdir 或命令开头 `cd <worktree>`；以 worktree 内 `git diff` 为唯一事实源，不要靠记忆拼凑多轮输出。

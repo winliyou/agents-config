@@ -22087,7 +22087,7 @@ server.registerTool("remote_run", {
 });
 server.registerTool("remote_sync", {
   title: "同步本地目录到远端工作区",
-  description: "把本地目录推到远端 /home/liyou/workspace（走 offload sync 的 tar 管道，自动排除 node_modules/.workwork/.worktrees/build 等）。返回远端路径与体积。",
+  description: "把本地目录推到远端 /home/liyou/workspace（走 offload sync 的 tar 管道，自动排除 node_modules/.workwork/.worktrees/.agents/worktrees/build 等）。返回远端路径与体积。",
   inputSchema: {
     local_path: string2().describe("本地目录绝对路径或 ~ 路径"),
     remote_name: string2().optional().describe("远端子目录名，默认取本地目录名"),

@@ -17,7 +17,7 @@ description: Docker 优先原则：服务运行、集成/E2E 测试、构建与�
 ## worktree 隔离（实战）
 
 - 项目名即隔离：compose 项目名默认取当前目录名——主工作树与 worktree 天然隔离（容器/网络/volume），此时不要显式 `-p` 成主项目名，否则接管主实例；cwd 必须是对应工作树根目录。
-- 目录名同名冲突：worktree 目录名与主工作树同名时（如 `.worktrees/<id>/<与主树同名>`），项目名冲突、直接 `up` 会接管主实例。此时必须显式 `-p <独立名>` 并重映射全部宿主端口：用不入库的 override 文件以 `!override` 替换 `ports`（放 `.workwork/` 这类已忽略目录）；清理时带同样的 `-p` 与 override，禁止用默认 `down -v`（会删除主实例数据卷）。模板（把 `<svc>` 与端口换成项目实际值）：
+- 目录名同名冲突：worktree 目录名与主工作树同名时（目录名取分支名末段，如分支 `feat/<与主树同名>` 落在 `.agents/worktrees/feat/<与主树同名>`），项目名冲突、直接 `up` 会接管主实例。此时必须显式 `-p <独立名>` 并重映射全部宿主端口：用不入库的 override 文件以 `!override` 替换 `ports`（放 `.workwork/` 这类已忽略目录）；清理时带同样的 `-p` 与 override，禁止用默认 `down -v`（会删除主实例数据卷）。模板（把 `<svc>` 与端口换成项目实际值）：
   ```yaml
   services:
     <svc-db>:

@@ -69,7 +69,7 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 s
 
 ## 检索审计：显式补查 gitignored 目录
 
-内容检索工具（DSH 的 grep 工具，ripgrep 内核）默认遵守 `.gitignore`：`.worktrees/`、`.workwork/`、`node_modules/` 会被静默跳过；系统 `grep -r` 不读 `.gitignore`，会照常搜到这些目录，不能拿它的结果判断「主检索」范围。
+内容检索工具（DSH 的 grep 工具，ripgrep 内核）默认遵守 `.gitignore`：`.agents/worktrees/`、`.workwork/`、`node_modules/` 会被静默跳过；系统 `grep -r` 不读 `.gitignore`，会照常搜到这些目录，不能拿它的结果判断「主检索」范围。
 
-- 做「全库有没有用 X」类审计时，**主检索之外必须按目录显式补查这两类路径**（如 `grep -rl 关键字 <项目>/.worktrees <项目>/.workwork`；或对 DSH grep 工具显式传目录路径——显式路径不受 ignore 过滤），并核对结果总数是否触达工具的返回上限。
+- 做「全库有没有用 X」类审计时，**主检索之外必须按目录显式补查这两类路径**（如 `grep -rl 关键字 <项目>/.agents/worktrees <项目>/.workwork`；仓库仍有历史 `.worktrees/` 检出时一并补查；或对 DSH grep 工具显式传目录路径——显式路径不受 ignore 过滤），并核对结果总数是否触达工具的返回上限。
 - 漏查可致 30 个引用文件（含整个 worktree 的脚本副本）被漏掉，使「某模式只有 A 项目在用」的结论失真；依赖类冲突（playwright/puppeteer）还要查 lockfile，不能只 grep 源码。
