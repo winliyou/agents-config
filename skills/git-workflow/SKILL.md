@@ -8,28 +8,33 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 任何会产生提交的改动都要加载。AGENTS.md 保留 Git 红线的一句话摘要，本 skill 提供完整流程与命令；改红线时同步核对 AGENTS.md 对应条目，保持两处一致。
 
 - 禁止改写 main/master 历史（限主工作树/main 分支）：reset --hard、push --force、rebase；分支内整理历史（rebase/reset）一律在 Worktree 中进行，见下。
-- 合并统一使用 `git merge --ff-only`，禁止 Merge Commit。
+- 合并统一走 GitHub PR：开发分支推送 → 开 PR → CI 全绿 → `gh pr merge --rebase --delete-branch`（保持线性历史，禁止 Merge Commit）；PR 流程命令见 `github-ci-flow` skill。
 - **仅当需要更改项目文件（修改/新增/删除代码、配置、文档等会产生提交的操作；单文件、typo、简单 bugfix 等无例外）时才新建 Worktree**：开发分支必须通过 DSH `create_worktree` 工具（或等价的 `git worktree add`）独占目录创建，目录统一为项目根 `.agents/worktrees/<分支名>`，严禁在主工作树上修改/提交代码或 `git checkout -b` / `git switch -c` 切分支。
 - 只读类操作（代码梳理、架构调研、阅读/检索代码、运行不产生文件改动的命令等）不需要新建 Worktree，直接在主工作树进行。
-- 主工作树允许的操作：`git fetch`、`git pull --ff-only`、`git merge --ff-only`、`git push`（推送合并后的 main）、发版 tag（`git tag` 打在合并后的 main 上再推送）、`git worktree add|list|remove`、`git branch -d`（清理已合并分支）以及只读命令（`status`/`log`/`diff`/`show`/`describe`…）。
-- 主工作树禁止的 git 写操作：`commit`、`checkout`、`switch`、`reset`、`rebase`、`cherry-pick`、`stash`、非 `--ff-only` 的 `merge`、新建/改名/非 `-d` 删除的 `branch`、推送非主干分支（见下条）。
-- **开发分支（feature/fix/refactor 等）一律禁止推送到远程**：分支只在本地 Worktree 生命周期内存在，合并进主分支后即删除。任何情况下不执行 `git push origin <开发分支>`（含 `-u` / `--set-upstream`）；`git push` 仅允许推送合并后的主分支与发版 tag。**唯一例外：`~/AGENTS.md` Git 红线中点名的那条 `alpha` 适配线**（收敛后彻底删除；用户级 skill 不写具体仓库名）；远程仓库只应存在主干分支、该 `alpha` 线与 CI 自动创建的分支（dependabot 等）；发现远程出现开发分支即为违规，须先合并或确认丢弃，再删除远程分支。
+- 主工作树允许的操作：`git fetch`、`git pull --ff-only`、`gh pr merge`（合并 PR）、`git push`（推送合并后的 main）、发版 tag（`git tag` 打在合并后的 main 上再推送）、`git worktree add|list|remove`、`git branch -d`（清理已合并分支）以及只读命令（`status`/`log`/`diff`/`show`/`describe`…）。
+- 主工作树禁止的 git 写操作：`commit`、`checkout`、`switch`、`reset`、`rebase`、`cherry-pick`、`stash`、非 PR 流程的 `merge`、新建/改名/非 `-d` 删除的 `branch`、推送非主干分支（PR head 分支除外，见下条）。
+- **开发分支只作为 PR 的 head 分支存在**：允许在对应 Worktree 内 `git push -u origin <分支>`（用于触发 `pull_request` CI 与创建 PR）；PR 合并后必须删除远程分支（`gh pr merge --delete-branch` 或 `git push origin --delete <分支>`）。远程仓库只应存在主干分支、`~/AGENTS.md` Git 红线点名的那条长期适配线与 CI 自动创建的分支（dependabot 等）。
 - 主工作树存在未提交改动且挡住合并时：若改动内容已逐字节确认完整存档进待合并分支，允许清理这些文件（`git restore <paths>`）；否则先与用户确认处置方式，不得擅自丢弃。
 - **修复敏感性验证（改坏 → 断言失败 → 恢复）的恢复步骤用 `cp` 备份，禁止用 `git checkout <file>` / `git restore <file>` 撤销探测**：探测点尚未提交时，这两条命令会把文件回退到 HEAD，直接丢掉本次全部改动（只能整份重做编辑）。恢复统一写 `cp /tmp/<name>.bak <file>`，并在探测后 `git diff --stat` 确认改动仍在。
 - 探测脚本要保证「编译通过但行为退化」，否则 build failed 会掩盖真正的断言失败（例：把参数改成空串时顺手留下未使用变量 → Go 报 declared and not used，看不到测试断言）。
 - 每条并行线一个 Worktree，互不干扰；Worktree 内可自由 rebase/reset/amend 整理历史。
 - Worktree 位置：项目根 `.agents/worktrees/<分支名>`（DSH worktree 插件默认目录，池由插件创建时自带 `*` 忽略文件；手工 `git worktree add` 且池无忽略文件时，先把 `.agents/worktrees/` 加入 `.gitignore` 或 `.git/info/exclude`）。优先用 DSH `create_worktree({ name, from: 'main' })`——新建分支、创建检出、把会话 cwd 切进去一步完成；等价命令为 `git worktree add -b <分支名> .agents/worktrees/<分支名> main`。基线除非用户指定，一律基于本地主分支创建，创建前确认主分支已同步到最新。
 
-## 合并流程（合并后清理）
+## PR 合并流程（合并后清理）
 
-1. Worktree 中 `git rebase main`，必要时 `git reset --soft main && git commit` 整理为单个提交。
-2. 按「完成前验证」过完全部检查（format、lint、test、build）。
-3. 主分支 `git merge --ff-only <分支>` 合并完成后，**自动删除该 Worktree 与已合并分支**，无需询问用户：
+日常改动一律走 GitHub PR 门禁。完整命令、CI 等待与失败排查见 `github-ci-flow` skill；本节只列顺序与清理纪律。
+
+1. Worktree 中提交（分支内可自由 rebase/reset 整理历史），推送到远程：`git push -u origin <分支>`。
+2. 立即开 PR（draft 同样触发 `pull_request` CI）：`gh pr create --draft --title ... --body-file ...`。
+3. 等待 CI：`gh pr checks <PR> --watch`；失败用 `gh run view <run-id> --log-failed` 排查，修好再推；**未全绿不得合并**。
+4. 全绿后：`gh pr ready <PR>` → `gh pr merge <PR> --rebase --delete-branch`（rebase 合并：线性历史、无 Merge Commit；禁止 `--merge`）。
+5. 主工作树同步：`git fetch --prune && git pull --ff-only`；发版 tag 打在合并后的 main 上再推送。
+6. **自动删除该 Worktree 与已合并的本地分支**，无需询问用户：
    - 若该 worktree 启动过 compose 环境，先清理其 compose 资源；
    - 用 `create_worktree` 进入过工作树的会话，先把工作目录切回主工作树（`working_directory({ cd: <项目主树> })` 或 shell `cd`），再执行删除——cwd 悬空会让后续命令报 `spawn /bin/zsh ENOENT`（见 `workspace-and-shell` skill）；
    - `git worktree remove .agents/worktrees/<分支名>`，再 `git branch -d <分支名>`（必须先 remove 再 -d，分支被 worktree 占用时无法删除；可先 `git branch --merged main` 做防御性确认）；
+   - 远程分支应由 `--delete-branch` 删除，`git fetch --prune` 复核；漏删时 `git push origin --delete <分支>`；
    - 若 `worktree remove` 因存在未跟踪文件失败，先检查是否为需要保留的产物（`.workwork/` 中间产物默认可丢弃），再决定是否 `--force`。
-4. 推送在主工作树进行：`git push`（推送合并后的 main）；发版 tag 打在合并后的 main 上再推送。Worktree 内的 commit 不直接 push，开发分支也不推远程建立跟踪——只有合并进主分支的更改才推送。
 5. **改动必须写在 worktree 内的路径上**：会话 cwd 是主工作树，edit/write 工具按该 cwd 解析相对路径——在 worktree 会话里用「主树路径 / 无前缀相对路径」改文件，会把改动落在**主检出**；随后在 worktree 内 `git commit` 得到 `nothing to commit`（改动仍在主树未提交，且 worktree 一旦删除，主树那份就成了游离改动）。规则：
    - 动手前 `pwd` 确认；改文件一律用 **worktree 绝对路径**（`<repo>/.agents/worktrees/<name>/...`）；
    - `git add -A` 后先看 `git status --short` 与 `git diff --stat` **非空**再 commit；空则立刻查是不是改到了主树；
@@ -106,8 +111,8 @@ done
 
 - **禁止 `git push --tags`**（会把本地所有 tag 一次性推出，必然超限），也禁止
   `git push origin <tag1> <tag2> <tag3> <tag4>` 这类批量推送。
-- **分支推送永远用 plain `git push`，不用 `--follow-tags`**：该选项会把 annotated
-  tag 顺带推出，让「显式打 tag」形同虚设，也绕过本节纪律。
+- **推送主干分支（main）时永远用 plain `git push`，不用 `--follow-tags`**：该选项会把 annotated
+  tag 顺带推出，让「显式打 tag」形同虚设，也绕过本节纪律。PR head 分支用 `git push -u origin <分支>` 推送，同样不带 tag。
 - **已推过的 tag 重复 `git push origin <tag>` 是安全空操作**（输出
   `Everything up-to-date`，退出码 0）——但也**不会补触发当初漏掉的 CI**；漏了只能
   删 tag 重推（见下）。
@@ -139,3 +144,10 @@ done
   Actions 秒级即败。**现行动作**：碰到该注解的失败直接忽略，不 rerun、不排查、不当发布阻塞；正确动作只有一个——把仓库转 public 走标准 CI（public 仓库 Actions 免费不限额）。
   **不要走「私有仓库本地构建发版」的替代路径**；项目侧的发版细节写在该项目文档，不记在本 skill。
   除 Billing 注解外，CI 失败仍按上两条处理，不得借本条豁免其他红灯。
+- **CI 卡在安装依赖步骤（apt/pip/npm）且耗时异常**：先判断是不是外部基础设施故障，而不是项目代码问题——
+  看失败是否发生在构建前、其他平台 job 是否正常、日志是否为 `Temporary failure resolving ...`/镜像不可达。
+  典型真因是上游故障（例如 Canonical DNS/Ubuntu 源故障时，GitHub-hosted Ubuntu runner 的 apt
+  update/install 会长时间卡住才失败，与仓库代码无关）。判定渠道：`actions/runner-images` 仓库 issue 搜索
+  + 上游状态页（如 `status.canonical.com`）；两处都不可达时也不能证明是自身问题。
+  处置：**不要为绕开故障改 apt 源/换第三方镜像或改构建流程**（除非用户明确授权）；等待恢复并间隔重试
+  （对同一 run 先 `gh run cancel` 再 `gh run rerun`；rerun 复用同一 run id、attempt 自增），CI 全绿前不推发版 tag。

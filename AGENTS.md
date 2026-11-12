@@ -38,11 +38,13 @@
 - 凭据（API token、证书私钥、口令）只按需读取使用，**禁止写入代码、文档、commit 或日志**。
 - 本机凭据归档位置见 `local-environment` skill。
 
-## 完成前验证（红线）
+## 完成前验证（CI 门禁优先，红线）
 
-- 声明任务完成前，必须实际执行验证命令并展示结果（测试输出、构建日志、lint 结果），不能仅声明成功。
-- 最低验证项：format → lint → test → build（format 仅在项目配置了格式化工具时执行）；环境限制无法执行某项时必须明确说明原因，未验证不算完成。
-- 涉及 Docker 的项目，最终验证须在容器内完成（见 `docker-workflow` skill）。
+- **验证分工**：全量测试、构建、打包、E2E、镜像构建等重活一律交给 GitHub Actions，不在本机跑（避免拖慢日常使用）；本地只跑项目 AGENTS.md 列出的「秒级静态检查」。完整流程见 `github-ci-flow` skill。
+- 声明任务完成前，必须出示 **CI 实际结论**（`gh pr checks <PR>` / `gh run view <run-id>` 的输出），不能仅声明成功；PR 未全绿不得合并。
+- 本地最低验证项：format + lint（或项目 AGENTS.md 定义的等价秒级命令）；环境限制无法执行某项时必须明确说明原因，未验证不算完成。
+- CI 覆盖不到的验证（真机、模拟器、鸿蒙 hvigor、音频设备、本地 Docker 冒烟、发布前门禁等）由项目 AGENTS.md 单独列出，合并前必须实际执行。
+- 涉及 Docker 的项目：镜像构建、容器内集成/E2E、发布前镜像验证一律交给 CI（在开发分支/PR 上执行），**不在本地 `docker build`**；本地仅在交互式调试时启动容器。发版 tag 由 Release workflow 构建并分发产物。见 `docker-workflow` 与 `github-ci-flow` skill。
 - 涉及 AGENTS.md / skill 的改动：`~/.agents/bin/skill-lint` 必须无 ERROR（日期、变更记录/时间线、踩坑记录/事故复盘类章节都是 ERROR；`--all` 覆盖项目级与项目 AGENTS.md）。
 
 ## 方案选择
@@ -56,10 +58,10 @@
 
 - **禁止改写 main/master 历史**（主工作树/main 分支）：`reset --hard`、`push --force`、`rebase`；分支内整理历史一律在 Worktree 中进行。
 - **仅当需要更改项目文件时才新建 Worktree**（会产生提交的操作，单文件/typo/简单 bugfix 无例外）：开发分支必须通过 DSH `create_worktree` 工具（或等价的 `git worktree add`）独占目录创建，统一放在项目根 `.agents/worktrees/<分支名>`；严禁在主工作树上修改/提交代码或切分支。
-- 合并统一用 `git merge --ff-only`，**禁止 Merge Commit**。
-- **开发分支（feature/fix/refactor 等）一律禁止推送到远程**；`git push` 只允许推送合并后的主分支与发版 tag。**唯一例外：dsh-plugins 的 `alpha` 适配线**（收敛后彻底删除）；远程只应存在主干分支、dsh-plugins 的 `alpha` 与 CI 自动创建的分支（dependabot 等）。
+- 合并统一走 PR：开发分支推送到远程 → 开 PR → CI 全绿 → `gh pr merge --rebase --delete-branch` 合并（保持线性历史，**禁止 Merge Commit**）；禁止本地 merge 后直接 push main。
+- **开发分支只作为 PR 的 head 分支存在**：允许 `git push origin <分支>`；PR 合并后必须删除远程分支。远程只应存在主干分支、dsh-plugins 的 `alpha` 适配线与 CI 自动创建的分支（dependabot 等）。
 - **发版 tag 一个一个推，推完确认再推下一个**；禁止 `git push --tags` 与 `--follow-tags`（批量推送会静默不触发 CI，机制见 `git-workflow` skill）。
-- 详细流程（worktree 创建/合并后清理/commit 格式与模型署名/打 tag 与推送纪律）见 `git-workflow` skill。
+- 详细流程（worktree 创建/PR 流程/合并后清理/commit 格式与模型署名/打 tag 与推送纪律）见 `git-workflow` 与 `github-ci-flow` skill。
 
 ## 技能使用原则
 
