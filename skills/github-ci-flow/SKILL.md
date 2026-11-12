@@ -90,6 +90,8 @@ gh run rerun <run-id>                   # 怀疑 flaky 时重跑同一 run
 
 1. `git fetch --prune` 后确认远程分支已删、本地 main 已前进（`git log --oneline -1`）。
 2. 删除 worktree 与本地分支（见上命令）；worktree 里的 `.workwork/` 随目录一并丢弃。
+   `gh pr merge --delete-branch` 会删除远程分支，实测还会注销 linked worktree 与本地分支；
+   仍以 `git worktree list` / `git branch` 复核，残留时手动 `worktree remove` + `branch -d`。
 3. 远程只应存在主干分支、项目声明的长期适配线与 CI 自动创建的分支（dependabot 等）；PR 合并后残留的远程开发分支必须删（`gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/<branch>` 或 `git push origin --delete <branch>`）。
 
 ## 已知坑
