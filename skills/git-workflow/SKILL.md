@@ -44,11 +44,12 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 ## Commit 格式
 
 - 格式：`<分类>(<范围>): <中文描述>`；分类：新增 / 修复 / 重构 / 文档 / 测试 / 样式 / 性能 / 构建 / 持续集成；范围可选（中文，如"战斗"、"认证"）。项目有既定惯例时，以项目 AGENTS.md 声明为准。
-- 提交末尾标注实际使用的 harness 与 AI 模型名：模型名从当前会话 system prompt 末尾获取真正背后运行的模型名，而非笼统的助手名；禁止凭记忆填写过往会话的模型名，每次 commit 前重新确认。
+- 提交末尾标注实际使用的 harness 与 AI 模型名：模型名从当前会话 system prompt 末尾获取真正背后运行的模型名，而非笼统的助手名；禁止凭记忆填写过往会话的模型名，每次 commit 前重新确认。同时加 `Co-authored-by` 共同作者 trailer（Git/GitHub 标准惯例，GitHub 据此在提交头显示共同作者徽标）：名字填模型家族名、邮箱填厂商非回复域（GLM → `noreply@z.ai`；模型不同步跟着换，禁止写具体人的真实邮箱）。
 
 ```
 Harness: DeepSeek Harness (dsh)
 Model: <模型名>
+Co-authored-by: GLM <noreply@z.ai>
 ```
 
 - **PR 描述末尾同样标注 harness 与模型**：body 末尾放一行「🤖 由 DeepSeek Harness（dsh）驱动，模型 `<模型名>`」加官方 badge（格式见 `dsh-badge` skill：shields.io 图 `powered_by-dsh-4D6BFE` 链接到 `https://github.com/deepseek-ai/deepseek-harness`，置末尾、不改配色）。
