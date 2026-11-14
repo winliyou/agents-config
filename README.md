@@ -56,7 +56,7 @@ npx skills add <owner/repo> -g -y -s <name> --copy
 **坑 3：从本地路径安装会把 lock 记成本地路径**（`source: /tmp/xxx`），之后 `update` 失效。
 必须用 `owner/repo` 形式安装，`npx skills list -g` 确认 Source 是仓库名而不是路径。
 
-### 当前 8 个第三方 skill 的来源（全部可 `npx skills update`）
+### 第三方 skill 的来源（全部可 `npx skills update`）
 
 | skill | Source |
 |---|---|
@@ -65,7 +65,7 @@ npx skills add <owner/repo> -g -y -s <name> --copy
 | `brand` / `design` / `design-system` / `slides` / `ui-styling` / `ui-ux-pro-max` | `nextlevelbuilder/ui-ux-pro-max-skill` |
 
 后 6 个的 frontmatter 里写着 `metadata.author: claudekit`，但**实际来源是公开仓库
-`nextlevelbuilder/ui-ux-pro-max-skill`**。已按此来源纳入 CLI 跟踪：
+`nextlevelbuilder/ui-ux-pro-max-skill`**。按此来源纳入 CLI 跟踪：
 
 ```bash
 npx skills add nextlevelbuilder/ui-ux-pro-max-skill -g -y \

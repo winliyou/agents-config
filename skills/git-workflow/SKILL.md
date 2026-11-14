@@ -44,15 +44,18 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 ## Commit 格式
 
 - 格式：`<分类>(<范围>): <中文描述>`；分类：新增 / 修复 / 重构 / 文档 / 测试 / 样式 / 性能 / 构建 / 持续集成；范围可选（中文，如"战斗"、"认证"）。项目有既定惯例时，以项目 AGENTS.md 声明为准。
-- 提交末尾标注实际使用的 AI 模型名：从当前会话 system prompt 末尾获取真正背后运行的模型名，而非笼统的助手名；禁止凭记忆填写过往会话的模型名，每次 commit 前重新确认。
+- 提交末尾标注实际使用的 harness 与 AI 模型名：模型名从当前会话 system prompt 末尾获取真正背后运行的模型名，而非笼统的助手名；禁止凭记忆填写过往会话的模型名，每次 commit 前重新确认。
 
 ```
+Harness: DeepSeek Harness (dsh)
 Model: <模型名>
 ```
 
+- **PR 描述末尾同样标注 harness 与模型**：body 末尾放一行「🤖 由 DeepSeek Harness（dsh）驱动，模型 `<模型名>`」加官方 badge（格式见 `dsh-badge` skill：shields.io 图 `powered_by-dsh-4D6BFE` 链接到 `https://github.com/deepseek-ai/deepseek-harness`，置末尾、不改配色）。
+
 - **多行/含引号的提交消息一律用 `-F <文件>`，不要内联 `-m`**：消息里出现 ASCII 双引号时，外层 shell 的双引号包裹会在第一个 `"` 处截断，`git commit` 静默失败或把消息剩余部分当独立命令执行——stdout 还常常是空的，极易误以为成功。安全做法：把消息写入临时文件后 `git commit -F <文件>`；提交后必须 `git log --oneline` + `git show --stat` 复核提交数与文件归属，不能只看命令退出与否。
 
-  **临时文件必须落在被 gitignore 的目录内**：写 `.workwork/commit-msg.txt`（目录整体被忽略）是安全的；写成同前缀的**根目录文件** `.workwork-commit-msg.txt` 只差一个 `/`，却不在忽略规则内——`git add -A` 会把它一路带进提交，且因为每次 commit 后 `rm`、下次又新建，会**连续多个提交**都夹带它，直到有人发现。判据：临时文件路径的**父目录**必须出现在 `.gitignore` 里，不能只靠文件名前缀相似。
+  **临时文件必须落在被 gitignore 的目录内，且文件名带任务/日期唯一标识**：写 `.workwork/commit-msg-<任务>-<日期>.txt`（目录整体被忽略）是安全的；写成同前缀的**根目录文件** `.workwork-commit-msg.txt` 只差一个 `/`，却不在忽略规则内——`git add -A` 会把它一路带进提交。判据：临时文件路径的**父目录**必须出现在 `.gitignore` 里。**另一坑：固定文件名会读到别的会话残留**——`.workwork/commit-msg.txt` 这类通用名可能存着上次会话的旧消息，`commit -F` 静默提交错误信息还带着旧 trailer（实测发生：消息与 trailer 全是别的会话内容，已推送远程才被发现）。修复方式：分支无 PR 时 `git commit --amend -F <正确文件>` 后 `push --force-with-lease`。
 
 ## 版本号以 tag 为源（发版项目，实战）
 
