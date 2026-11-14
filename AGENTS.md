@@ -61,7 +61,7 @@
 - 合并统一走 PR：开发分支推送到远程 → 开 PR → CI 全绿 → `gh pr merge --rebase --delete-branch` 合并（保持线性历史，**禁止 Merge Commit**）；禁止本地 merge 后直接 push main。
 - **开发分支只作为 PR 的 head 分支存在**：允许 `git push origin <分支>`；PR 合并后必须删除远程分支。远程只应存在主干分支、dsh-plugins 的 `alpha` 适配线与 CI 自动创建的分支（dependabot 等）。
 - **发版 tag 一个一个推，推完确认再推下一个**；禁止 `git push --tags` 与 `--follow-tags`（批量推送会静默不触发 CI，机制见 `git-workflow` skill）。
-- 详细流程（worktree 创建/PR 流程/合并后清理/commit 格式与模型署名/打 tag 与推送纪律）见 `git-workflow` 与 `github-ci-flow` skill。
+- 详细流程（worktree 创建/PR 流程/合并后清理/commit 格式与 harness/模型署名/打 tag 与推送纪律）见 `git-workflow` 与 `github-ci-flow` skill。
 
 ## 技能使用原则
 
