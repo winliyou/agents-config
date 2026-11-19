@@ -1,6 +1,6 @@
 ---
 name: workspace-and-shell
-description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 shell 工作目录已知坑。触发：需要写计划/笔记/截图/调研草稿/临时产物，或决定中间文件该放哪、可否写进 docs/；命令莫名失败且报错指向 shell 二进制（spawn ENOENT、spawn /bin/zsh ENOENT）或 cwd 被删后全部命令失效；怀疑文件改错位置、误改主检出而非 worktree；怀疑长文件读写被静默截断丢内容。
+description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）、任务收尾清理与 shell 工作目录已知坑。触发：需要写计划/笔记/截图/调研草稿/临时产物，或决定中间文件该放哪、可否写进 docs/；任务收尾清理 .workwork 临时文件、主工作树 .workwork 残留占盘、跨项目清理遗留（workwork-gc）；命令莫名失败且报错指向 shell 二进制（spawn ENOENT、spawn /bin/zsh ENOENT）或 cwd 被删后全部命令失效；怀疑文件改错位置、误改主检出而非 worktree；怀疑长文件读写被静默截断丢内容。
 ---
 
 # 工作目录与 Shell 陷阱（Workspace & Shell）
@@ -11,10 +11,22 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 s
 
 - AI 工作期间产生的所有中间文件一律写入项目根 `.workwork/`（需确保已加入项目 .gitignore），包括但不限于：计划文件、进度文件、任务清单、截图、设计文档草稿（SDD）、调研笔记、方案对比记录、会话记录、临时导出产物等。
 - `.workwork/` 按工作树严格隔离，不在不同 worktree 之间共享：中间文件一律写入**当前所在工作树根**下的 `.workwork/`；在 worktree 内工作时禁止读写主工作树的 `.workwork/`，反之亦然，避免并行线互相干扰。worktree 的 `.workwork/` 属该分支临时产物，随 worktree 一并删除（见 `git-workflow` skill 的合并流程，默认可丢弃）。
+- **按任务建子目录**：每个任务在 `.workwork/<任务 slug>/` 下工作（如 `.workwork/ui-r14/`、`.workwork/verify-rc3/`），计划、截图、日志、脚本、验证产物都放该目录；禁止把大批文件平铺在 `.workwork/` 根下——平铺后只能整体猜着删，按任务清理无从下手。
 - **禁止把 `docs/`、`doc/`、`documentation/` 等目录当作 AI 实现过程的文件目录**（计划、进度、任务清单、调研笔记等一律不得写入）；`docs/` 只存放项目的真实文档（用户文档、API 文档、架构文档等需提交的内容）。
 - 发现 AI 中间文件被误写入 `docs/` 或项目其他位置时，将其迁移到 `.workwork/` 对应位置，并视情况清理 `git status` 中多余的变更。
 - `.workwork/` 禁止存放任何需要提交的代码或配置。
 - 例外：项目确需把 `.workwork/` 兼作运行时数据目录时，须在该项目 AGENTS.md 显式声明；默认仍仅放 AI 中间文件。
+
+## `.workwork/` 生命周期与收尾清理（红线）
+
+`.workwork/` 没有任何自动清理机制：worktree 的随 worktree 删除，**主工作树的必须自己清**，否则每次任务都会留下几十 MB 到数 GB 残留。
+
+- **任务收尾即删**：给出最终答复前 `rm -rf .workwork/<任务 slug>`，并用 `du -sh .workwork` 复核；默认不保留——「以后可能有用」不构成保留理由，用户明确要求保留的当场挪到交付位置或作为附件发出后再删。任务中断、切换任务同样先清理。
+- **主工作树是重点**：只读/验证类任务通常不开 worktree，直接在主工作树产生残留；这类任务的收尾清理与 worktree 内的任务同等强制。同一会话开始新任务前先确认无自己上次任务的残留。需要保留大量验证产物、或验证本身很重的任务，开 worktree 做并随 worktree 一起丢弃，比事后手工清 `.workwork` 更彻底。
+- **不删的例外**：项目 AGENTS.md 显式声明的运行时/持久数据（采集数据目录、设备状态文件等）；跨任务复用的构建缓存（gocache、bun-cache、模块缓存）由批量巡检按年龄清理，不要求每次任务收尾删除，但禁止无上限膨胀——repo 副本、浏览器 profile、容器导出等大产物用完即删。
+- **归属判断**：非本次任务产生的条目按最新修改时间判断（`find <条目> -type f -exec stat -f '%m' {} + | sort -rn | head -1`）：7 天以上未修改视为可清；近期修改但确认无活跃会话/任务的也可清；无法确认时先把报告给用户再动。
+- **批量巡检与清理**：`~/.agents/bin/workwork-gc` 只读报告各项目 `.workwork` 的体积、最新修改时间与可清理量；`workwork-gc --prune`（默认 7 天阈值，`--days N` 可调）删除超龄顶层条目，`--project <dir>` 只处理单个项目，`--roots a,b` 指定扫描根（默认扫描 `~/work` 与 `~/Documents/deepseek-harness` 两个根）。worktree 池内的 `.workwork` 随 worktree 删除、只报告不清理；未合并的遗留 worktree 按 `git-workflow` 删除 worktree，而不是只删其 `.workwork`。
+- **错误信号**：出现 `.workwork/.workwork` 嵌套 = 某次会话把 `.workwork` 当成了项目根（cwd 错），删除嵌套并核对 `pwd`；`.workwork` 出现在 `git status` 里 = 项目漏配忽略规则，当场补 `.gitignore`（判据 `git check-ignore -v .workwork`）。
 
 ## skill 发现范围与工具默认输出目录
 

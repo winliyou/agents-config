@@ -1,0 +1,281 @@
+#!/usr/bin/env node
+/**
+ * workwork-gc —— 巡检/清理各项目 .workwork 临时产物目录。
+ *
+ * 默认只读巡检；--prune 删除超龄（默认 7 天）的顶层条目。
+ * 规则来源：~/.agents/skills/workspace-and-shell/SKILL.md 的「.workwork 生命周期与收尾清理」。
+ *
+ * 用法：
+ *   workwork-gc                          # 巡检（只读）
+ *   workwork-gc --prune                  # 删除 7 天以上未修改的条目
+ *   workwork-gc --prune --days 3         # 阈值改为 3 天
+ *   workwork-gc --project ~/work/hotspot # 只处理某个项目
+ *   workwork-gc --roots ~/work,~/src     # 指定扫描根（默认 ~/work,~/Documents/deepseek-harness）
+ *   workwork-gc --json                   # 机器可读输出
+ *
+ * 安全边界：只处理扫描根的 .workwork 目录内「直接子条目」，不删除 .workwork 本身（清空后删空目录除外）；
+ * 工作树（worktree）里的 .workwork 随 worktree 删除，只报告不清理；符号链接不跟随。
+ */
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { parseArgs } from 'node:util';
+
+const HOME = os.homedir();
+const DEFAULT_ROOTS = ['~/work', '~/Documents/deepseek-harness'];
+const PROTECTED = new Set(['.gitignore', '.keep']);
+const SKIP_DIRS = new Set([
+  '.git', '.hg', '.svn', 'node_modules', 'dist', 'build', 'out', 'target',
+  '.gradle', '.cache', 'Pods', '.venv', 'venv', 'coverage', '.next', '.nuxt',
+  '.svelte-kit', '.dart_tool', 'oh_modules', 'vendor', '.idea', '.vscode',
+]);
+const MAX_DEPTH = 8;
+const KIND_LABEL = { repo: '主仓库', worktree: '工作树', workspace: '工作区', pool: '池根残留' };
+
+function usage() {
+  const text = fs.readFileSync(new URL(import.meta.url), 'utf8');
+  const m = text.match(/\/\*\*([\s\S]*?)\*\//);
+  console.log((m ? m[1] : '').replace(/^ \* ?/gm, '').trim());
+}
+
+function humanSize(bytes) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = bytes;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+  return `${v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2)}${units[i]}`;
+}
+
+function ageDays(mtimeMs) {
+  return (Date.now() - mtimeMs) / 86400000;
+}
+
+function fmtDate(mtimeMs) {
+  const d = new Date(mtimeMs);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function expandHome(p) {
+  if (p === '~') return HOME;
+  if (p.startsWith('~/')) return path.join(HOME, p.slice(2));
+  return p;
+}
+
+function displayPath(p) {
+  const abs = path.resolve(p);
+  if (abs === HOME) return '~';
+  if (abs.startsWith(HOME + path.sep)) return '~/' + path.relative(HOME, abs);
+  return abs;
+}
+
+/** 递归分析一个条目的体积 / 文件数 / 最新修改时间；符号链接只计自身、不跟随。 */
+function analyzeEntry(entryPath) {
+  let size = 0;
+  let files = 0;
+  let maxMtime = 0;
+  const stack = [entryPath];
+  while (stack.length > 0) {
+    const p = stack.pop();
+    let st;
+    try { st = fs.lstatSync(p); } catch { continue; }
+    if (st.mtimeMs > maxMtime) maxMtime = st.mtimeMs;
+    if (st.isDirectory()) {
+      let names;
+      try { names = fs.readdirSync(p); } catch { continue; }
+      for (const name of names) stack.push(path.join(p, name));
+    } else {
+      files += 1;
+      size += st.size;
+    }
+  }
+  return { size, files, maxMtime };
+}
+
+/** 判定 .workwork 所属类型：主仓库 / 工作树 / 普通工作区 / 工作树池根残留。 */
+function classify(workworkPath) {
+  const projectDir = path.dirname(workworkPath);
+  const gitPath = path.join(projectDir, '.git');
+  try {
+    const st = fs.lstatSync(gitPath);
+    return { kind: st.isFile() ? 'worktree' : 'repo', projectDir };
+  } catch { /* 不是 git 根 */ }
+  if (workworkPath.includes('/.worktrees/') || workworkPath.includes('/.agents/worktrees/')) {
+    return { kind: 'pool', projectDir };
+  }
+  return { kind: 'workspace', projectDir };
+}
+
+/** 找出扫描根下所有 .workwork 目录（不进入 .workwork 内部、不跟随符号链接）。 */
+function findWorkworks(roots) {
+  const found = [];
+  for (const root of roots) {
+    const absRoot = path.resolve(expandHome(root));
+    let st;
+    try { st = fs.statSync(absRoot); } catch { console.error(`[跳过] 根目录不存在：${absRoot}`); continue; }
+    if (!st.isDirectory()) { console.error(`[跳过] 不是目录：${absRoot}`); continue; }
+    const stack = [{ dir: absRoot, depth: 0 }];
+    while (stack.length > 0) {
+      const { dir, depth } = stack.pop();
+      if (depth > MAX_DEPTH) continue;
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      for (const ent of entries) {
+        if (ent.isSymbolicLink()) continue;
+        if (!ent.isDirectory()) continue;
+        const full = path.join(dir, ent.name);
+        if (ent.name === '.workwork') {
+          found.push({ workwork: full, ...classify(full) });
+          continue;
+        }
+        if (SKIP_DIRS.has(ent.name)) continue;
+        stack.push({ dir: full, depth: depth + 1 });
+      }
+    }
+  }
+  const seen = new Set();
+  return found.filter((item) => (seen.has(item.workwork) ? false : (seen.add(item.workwork), true)));
+}
+
+function inspect(workworkItem, days) {
+  const cutoff = Date.now() - days * 86400000;
+  const entries = [];
+  let names = [];
+  try { names = fs.readdirSync(workworkItem.workwork); } catch { /* 忽略 */ }
+  for (const name of names) {
+    const entryPath = path.join(workworkItem.workwork, name);
+    const info = analyzeEntry(entryPath);
+    const stale = info.maxMtime < cutoff && !PROTECTED.has(name);
+    entries.push({ name, path: entryPath, stale, ...info, ageDays: ageDays(info.maxMtime) });
+  }
+  entries.sort((a, b) => b.size - a.size);
+  const totalSize = entries.reduce((sum, e) => sum + e.size, 0);
+  const totalFiles = entries.reduce((sum, e) => sum + e.files, 0);
+  const staleSize = entries.filter((e) => e.stale).reduce((sum, e) => sum + e.size, 0);
+  const newest = entries.reduce((max, e) => Math.max(max, e.maxMtime), 0);
+  return { ...workworkItem, entries, totalSize, totalFiles, staleSize, newest };
+}
+
+function printReport(reports, days) {
+  console.log(`workwork-gc 巡检（阈值 ${days} 天；--prune 执行清理）\n`);
+  if (reports.length === 0) { console.log('未发现 .workwork 目录。'); return; }
+  let all = 0;
+  let allStale = 0;
+  let allEntries = 0;
+  for (const item of reports.slice().sort((a, b) => b.totalSize - a.totalSize)) {
+    if (item.entries.length === 0 && item.totalSize === 0) {
+      console.log(`  (空)  ${displayPath(item.workwork)}`);
+      continue;
+    }
+    all += item.totalSize;
+    allStale += item.staleSize;
+    allEntries += item.entries.length;
+    const tag = KIND_LABEL[item.kind];
+    const staleText = item.staleSize > 0 ? `可清理 ${humanSize(item.staleSize)}` : '无可清理条目';
+    const newer = item.newest > 0 ? `最新修改 ${fmtDate(item.newest)}（${Math.floor(ageDays(item.newest))} 天前）` : '无文件';
+    console.log(`${humanSize(item.totalSize).padStart(7)}  ${String(item.totalFiles).padStart(6)} 文件  ${staleText.padEnd(16)}  ${displayPath(item.workwork)}  [${tag}]`);
+    console.log(`         条目 ${item.entries.length} 个，${newer}`);
+    const shown = item.entries.filter((e) => e.stale).slice(0, 3);
+    for (const e of shown) {
+      console.log(`      ├ ${e.name}  ${humanSize(e.size)}  ${fmtDate(e.maxMtime)}（${Math.floor(e.ageDays)} 天前）`);
+    }
+    const rest = item.entries.filter((e) => e.stale).length - shown.length;
+    if (rest > 0) console.log(`      └ …另 ${rest} 个可清理条目`);
+    if (item.kind === 'worktree') console.log('      （工作树内 .workwork 随 worktree 删除，只报告不清理）');
+    console.log('');
+  }
+  console.log(`合计：${reports.length} 个 .workwork，${allEntries} 个条目，${humanSize(all)}；其中 ${humanSize(allStale)} 已超 ${days} 天可清理。`);
+  console.log('清理：workwork-gc --prune [--days N]；单项目：--project <目录>；空目录会一并删除。');
+  console.log('说明：体积为文件实际大小之和，du -sh 因块对齐会更大。');
+}
+
+function prune(reports, days) {
+  const cutoff = Date.now() - days * 86400000;
+  let freed = 0;
+  let removed = 0;
+  let skippedWorktrees = 0;
+  for (const item of reports) {
+    if (item.kind === 'worktree') { skippedWorktrees += 1; continue; }
+    const parent = item.workwork;
+    if (item.entries.length === 0) {
+      try { fs.rmdirSync(parent); removed += 1; console.log(`删除空目录 ${displayPath(parent)}`); } catch { /* 忽略 */ }
+      continue;
+    }
+    const targets = item.entries.filter((e) => e.stale && !PROTECTED.has(e.name));
+    for (const e of targets) {
+      try {
+        fs.rmSync(e.path, { recursive: true, force: true, maxRetries: 2 });
+        freed += e.size;
+        removed += 1;
+        console.log(`删除 ${displayPath(e.path)}（${humanSize(e.size)}，${Math.floor(e.ageDays)} 天未修改）`);
+      } catch (err) {
+        console.error(`[失败] ${displayPath(e.path)}：${err.message}`);
+        console.error('       只读文件导致的失败：chmod -R u+w 该目录后重试。');
+      }
+    }
+    if (targets.length > 0) {
+      try {
+        if (fs.readdirSync(parent).length === 0) {
+          fs.rmdirSync(parent);
+          console.log(`删除空目录 ${displayPath(parent)}`);
+        }
+      } catch { /* 忽略 */ }
+    }
+  }
+  console.log(`\n完成：删除 ${removed} 个条目，释放 ${humanSize(freed)}。`);
+  if (skippedWorktrees > 0) {
+    console.log(`跳过 ${skippedWorktrees} 个 worktree 内 .workwork（随 worktree 删除；遗留 worktree 按 git-workflow 删除 worktree 本身）。`);
+  }
+  console.log('复核：workwork-gc（再次巡检应显示可清理量归零）。');
+}
+
+function main() {
+  let values;
+  try {
+    ({ values } = parseArgs({
+      options: {
+        prune: { type: 'boolean', default: false },
+        days: { type: 'string', default: '7' },
+        roots: { type: 'string' },
+        project: { type: 'string', multiple: true },
+        json: { type: 'boolean', default: false },
+        help: { type: 'boolean', default: false },
+      },
+      allowPositionals: false,
+    }));
+  } catch (err) {
+    console.error(err.message);
+    usage();
+    process.exit(1);
+  }
+  if (values.help) { usage(); return; }
+  const days = Number(values.days);
+  if (!Number.isFinite(days) || days < 0) {
+    console.error('--days 必须是 >= 0 的数字');
+    process.exit(1);
+  }
+  const roots = values.project && values.project.length > 0
+    ? values.project.map((p) => path.resolve(p))
+    : (values.roots ? values.roots.split(',').map((s) => s.trim()).filter(Boolean) : DEFAULT_ROOTS);
+  const found = findWorkworks(roots);
+  const reports = found.map((item) => inspect(item, days));
+
+  if (values.json) {
+    console.log(JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      days,
+      prune: values.prune,
+      workworks: reports,
+    }, null, 2));
+    return;
+  }
+  if (values.prune) {
+    if (days === 0) console.log('注意：--days 0 会删除全部条目（worktree 内除外）。\n');
+    prune(reports, days);
+    return;
+  }
+  printReport(reports, days);
+}
+
+main();

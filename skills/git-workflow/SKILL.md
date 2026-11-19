@@ -53,6 +53,7 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
    - **清理核实必须是独立命令**：`git branch --list <模式>` 单独执行、输出为空才算干净。不要把 grep/删除与「已清空」提示串进同一条 `&&`/`||` 链——链上任何一环静默失败时，链尾的提示照样打印，制造「已清理」假象；
    - 远程分支应由 `--delete-branch` 删除，`git fetch --prune` 复核；漏删时 `git push origin --delete <分支>`；
    - 若 `worktree remove` 因存在未跟踪文件失败，先检查是否为需要保留的产物（`.workwork/` 中间产物默认可丢弃），再决定是否 `--force`。
+   - worktree 的 `.workwork/` 随目录删除；**主工作树的 `.workwork/` 不在本次删除范围**——本次会话若在主树写过中间产物（对照、诊断、截图等），按 `workspace-and-shell` skill 的收尾规程清理，别让主树残留随每次任务叠加。
 7. **改动必须写在 worktree 内的路径上**：会话 cwd 是主工作树，edit/write 工具按该 cwd 解析相对路径——在 worktree 会话里用「主树路径 / 无前缀相对路径」改文件，会把改动落在**主检出**；随后在 worktree 内 `git commit` 得到 `nothing to commit`（改动仍在主树未提交，且 worktree 一旦删除，主树那份就成了游离改动）。规则：
    - 动手前 `pwd` 确认；改文件一律用 **worktree 绝对路径**（`<repo>/.agents/worktrees/<name>/...`）；
    - `git add -A` 后先看 `git status --short` 与 `git diff --stat` **非空**再 commit；空则立刻查是不是改到了主树；
@@ -75,6 +76,8 @@ Co-authored-by: <模型家族> <对应厂商非回复域>
 - **多行/含引号的提交消息一律用 `-F <文件>`，不要内联 `-m`**：消息里出现 ASCII 双引号时，外层 shell 的双引号包裹会在第一个 `"` 处截断，`git commit` 静默失败或把消息剩余部分当独立命令执行——stdout 还常常是空的，极易误以为成功。安全做法：把消息写入临时文件后 `git commit -F <文件>`；提交后必须 `git log --oneline` + `git show --stat` 复核提交数与文件归属，不能只看命令退出与否。
 
   **临时文件必须落在被 gitignore 的目录内，且文件名带任务/日期唯一标识**：写 `.workwork/commit-msg-<任务>-<日期>.txt`（目录整体被忽略）是安全的；写成同前缀的**根目录文件** `.workwork-commit-msg.txt` 只差一个 `/`，却不在忽略规则内——`git add -A` 会把它一路带进提交。判据：临时文件路径的**父目录**必须出现在 `.gitignore` 里。**另一坑：固定文件名会读到别的会话残留**——`.workwork/commit-msg.txt` 这类通用名可能存着上次会话的旧消息，`commit -F` 静默提交错误信息还带着旧 trailer（实测发生：消息与 trailer 全是别的会话内容，已推送远程才被发现）。修复方式：分支无 PR 时 `git commit --amend -F <正确文件>` 后 `push --force-with-lease`。
+
+  **提交失败被吞后禁止「盲重试 + soft reset」**：`-F` 与 `-m` 不能同时用（git 报错退出），把报错用 `2>/dev/null` 吞掉后若紧接着 `git reset --soft HEAD~1` 想撤销「刚才那次提交」，实际撤销的是**上一个正常提交**（已合并进 main 的也会被摘出）；再 `commit --amend` 会改写这个错误的 HEAD，把已合并内容卷进重写、把分支历史搞乱（实测发生：amend 把已合并的 PR 提交整个卷进新提交，PR diff 全错）。规矩：`git commit` 的输出**永不静默**，失败当场停下看报错；撤销提交用 `git reset --soft HEAD~1` 前先 `git log --oneline -1` 确认 HEAD 正是要撤的提交；amend 前先 `git show --stat HEAD` 确认改的是目标提交。
 
 ## 版本号以 tag 为源（发版项目，实战）
 

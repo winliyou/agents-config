@@ -28,7 +28,7 @@ description: Docker 优先原则：服务运行、集成/E2E 测试、构建与�
         - "127.0.0.1:<新宿主端口>:<容器端口>"
   ```
   启动：`docker compose -p <独立名> -f docker-compose.yml -f <override文件> up -d`；清理：`docker compose -p <独立名> -f docker-compose.yml -f <override文件> down`（不带 `-v`）。
-- 合并后生效：worktree 合并回主分支后，若主环境容器在运行，重启受影响的主容器并确认 healthy；删除 worktree 前先 `down` 清理其 compose 资源。
+- 合并后生效：worktree 合并回主分支后，若主环境容器在运行，重启受影响的主容器并确认 healthy；删除 worktree 前先 `down` 清理其 compose 资源。worktree 的 `.workwork/`（含 compose override 文件）随 worktree 删除；主工作树的临时 override 文件与 compose 日志在任务收尾删除（见 `workspace-and-shell` skill）。
 
 ## 沙盒内用 docker
 

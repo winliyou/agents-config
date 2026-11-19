@@ -119,7 +119,7 @@ agent-browser --auto-connect <命令>          # 等价：AGENT_BROWSER_CDP=9222
    agent-browser tab list                        # 当前会话只留 1 个标签
    ```
 4. **多轮迭代循环（goal/ralph/逐轮验证）必须每轮结束回收本轮实例**：把 close 攒到任务最后一轮 = 轮间空档全是泄漏窗口。清理/删除类动作的前置守卫**核验到活进程/活引用时必须中止执行（exit 非零）**，不能打印警告后继续——否则会照样 rm，误删刚启动实例的临时 profile。验证：每轮收尾后 `agent-browser session list` 只剩受保护会话。
-5. **产物不落公共目录**：截图/HAR/下载落项目工作区；落到 `~/.agent-browser/tmp/` 的由 reaper 按 7 天 TTL（`AB_TMP_TTL_DAYS`）清理，需保留的当场挪走。
+5. **产物不落公共目录，且随任务收尾删除**：截图/HAR/下载落项目 `.workwork/<任务>/`，本次任务产物在收尾时随目录一起删除（规则见 `workspace-and-shell` skill）；落到 `~/.agent-browser/tmp/` 的由 reaper 按 7 天 TTL（`AB_TMP_TTL_DAYS`）清理，需保留的当场挪走。
 6. **持久 profile 不用了要删**：`~/.agent-browser/profiles/<用途>/`，删除前 tar 备份到 `~/.dsh/backups/`。
 7. **会话命名按任务独立**（`--session <名>-$$` 或项目固定名），禁止复用他人/他项目名字（跨项目固定名冲突会让两个任务共用同一实例、标签互抢）。
 

@@ -29,13 +29,13 @@ git worktree add -b <type>/<slug> .agents/worktrees/<type>/<slug> main
 git check-ignore -v .agents/worktrees/probe
 
 # 2) 本地只跑秒级检查（见下节「本地 vs CI 分工」），提交
-git add -A && git commit -F .workwork/commit-msg.txt
+git add -A && git commit -F .workwork/commit-msg-<任务>.txt
 
 # 3) 推分支（允许且必须作为 PR head；不再「开发分支禁止推远程」）
 git push -u origin <type>/<slug>
 
 # 4) 立即开 PR（draft 即可，draft 同样触发 pull_request CI）
-gh pr create --draft --title "<中文标题>" --body-file .workwork/pr-body.md
+gh pr create --draft --title "<中文标题>" --body-file .workwork/pr-body-<任务>.md
 
 # 5) 等待 CI（长等待用后台 job，不要前台干等）
 gh pr checks <PR 号> --watch --interval 30
@@ -50,6 +50,7 @@ git worktree remove .agents/worktrees/<type>/<slug>
 git branch -d <type>/<slug>
 ```
 
+- 提交与 PR 创建完成后立即删除 `.workwork` 里的 commit-msg 与 pr-body 临时文件；worktree 收尾时整个 `.workwork/` 随目录丢弃，主工作树写的那份自己清（规则见 `workspace-and-shell` skill 的 `.workwork` 生命周期）。
 - 合并方式统一 `--rebase`：线性历史、无 Merge Commit，保留分支内提交；不用 `--merge`，也不用 `--squash`（除非用户明确要求）。
 - PR 标题/正文用中文；正文包含变更说明与验证证据（CI run 链接）。创建 PR 时按 `dsh-badge` skill 在正文末尾加 powered by dsh 徽章。
 - **PR 未全绿不得合并**；失败先修再推，禁止 `--admin` 绕过（除非用户在会话中明确要求）。
@@ -83,6 +84,7 @@ gh run rerun <run-id>                   # 怀疑 flaky 时重跑同一 run
 
 - 长等待（macOS runner 排队可达十几分钟）：把 `gh pr checks --watch` 用后台 job 跑，期间继续做其他项目/其他 PR 的工作，用 `job_output` 收结果；不要用 sleep 空转。
 - **同一个 PR 连续推送会取消旧 run**（CI 通常配了 concurrency）——等最新 commit 的 run 即可，旧 run cancelled 属正常。
+- **久置 PR 的 checks 是历史 run，合并前必须确证它属于当前 head**：dependabot 等机器人 PR 可能创建后长期无人动，`gh pr checks` 展示的 pass 是创建当时的 run；直接据此合并前先核对 `gh api repos/{owner}/{repo}/actions/runs/<run-id> --jq .head_sha`（注意 REST 字段是 snake_case，camelCase 的 .headSha 恒为 null）与 `gh pr view --json headRefOid` 一致——一致则旧 run 对当前 head 仍有效可直接合并；不一致（主分支变化要求重跑等场景）先 `gh pr update-branch` 或推空提交触发新 run。
 - **job 稳定 15m 左右失败且无日志＝runner 容量问题，不是代码问题**：判据是
   `gh run view <run-id>` 的 ANNOTATIONS 出现「The job was not acquired by Runner of
   type hosted even after multiple attempts」+「capacity constraints」（macOS arm64
@@ -95,7 +97,7 @@ gh run rerun <run-id>                   # 怀疑 flaky 时重跑同一 run
 ## 合并后必做
 
 1. `git fetch --prune` 后确认远程分支已删、本地 main 已前进（`git log --oneline -1`）。
-2. 删除 worktree 与本地分支（见上命令）；worktree 里的 `.workwork/` 随目录一并丢弃。
+2. 删除 worktree 与本地分支（见上命令）；worktree 里的 `.workwork/` 随目录一并丢弃，主工作树的 `.workwork/` 不会——本次会话若在主树写过中间产物，按 `workspace-and-shell` skill 收尾清理。
    `gh pr merge --delete-branch` 会删除远程分支，实测还会注销 linked worktree 与本地分支；
    仍以 `git worktree list` / `git branch` 复核，残留时手动 `worktree remove` + `branch -d`。
 3. 远程只应存在主干分支、项目声明的长期适配线与 CI 自动创建的分支（dependabot 等）；PR 合并后残留的远程开发分支必须删（`gh api -X DELETE repos/{owner}/{repo}/git/refs/heads/<branch>` 或 `git push origin --delete <branch>`）。
