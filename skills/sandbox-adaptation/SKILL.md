@@ -33,6 +33,13 @@ DSH 沙盒问题第一入口。**本机唯一首选解法：凡是「某个 home
 - 构建/测试等长命令不要用 `| tail` 收退出码（管道吞掉真实退出码，失败会被误判为成功）：`cmd > log 2>&1; echo "[exit=$?]"; tail log`，或 `cmd | tail; echo "[exit=${PIPESTATUS[0]}]"`。
 - `~/.agent-browser` 是有意**不**放行的特例（不是单纯目录权限问题：放行会让 agent-browser 在沙盒内误启动、Chrome 因嵌套沙盒起不来），见 `browser-automation-safety` skill。
 
+**已知实例：Android 模拟器在 web profile 下起不来（jwk 目录）**
+
+- 现象：headless 启动 emulator 日志出现 FATAL 行：Failed to create jwk directory ~/Library/Caches/TemporaryItems/avd/running/<pid>/jwks/<uuid>，adb devices 始终为空。
+- 根因：emulator 的 AVD 运行态（jwk、running 锁目录）硬编码走 macOS ~/Library/Caches/TemporaryItems，TMPDIR 环境变量改不动它（实测无效）；desktop profile 放行了整棵 ~/Library/Caches 所以桌面会话不受影响，web profile 只放行了细粒度子目录（pnpm/pip/ms-playwright 等）→ 沙盒下该目录不可写。
+- 解法：给 web profile 的 extraWritableRoots 追加 ~/Library/Caches（与 desktop 对齐）；配置文件自身在 ~/.dsh/profiles/web/cordis.patch.yml，而 web profile 未放行 ~/.dsh 时文件工具写不了它——改用设置页「插件配置 → 沙盒额外允许目录」（写同一份配置）或对单条编辑走提权审批。
+- 验证：mkdir -p ~/Library/Caches/TemporaryItems/avd/running/probe && touch ~/Library/Caches/TemporaryItems/avd/running/probe/.probe 成功后，重起模拟器确认日志无 FATAL jwk 且 adb devices 出现 emulator。
+
 ## 二、不是「目录权限」的沙盒问题
 
 1. **嵌套沙盒冲突**（Chrome/Chromium、容器运行时自己的沙盒）：报错 `Failed to initialize sandbox` / `sandbox initialization failed: Operation not permitted` / GPU 进程崩溃，或表层只报 `CDP response channel closed`。目录重定向无效；现行正解是提权执行并保留原生沙盒（判定口径见本 skill 第四节；`browser-automation-safety` 只讲浏览器侧红线）。

@@ -47,6 +47,9 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 s
 - 脚本里「$VAR」后紧跟多字节字符（如中文省略号 …、中文标点）时，bash 3.2 会把该字符首字节并入变量名解析，报「VAR<0xe2>: unbound variable」并中断脚本；同脚本在 bash 4+/zsh 下正常，极具迷惑性。
 - 修复/预防：变量后接非 ASCII 字符时一律加花括号「${VAR}…」显式定界；写脚本时变量后直接跟 CJK 字符的写法直接避免。
 - 在 agent-browser wrapper 上同样命中：全角句号「。」也会触发；花括号定界修复有效。
+- 别以为新版 bash 就安全：沙盒/极简 PATH 下 `#!/usr/bin/env bash` 会解析到系统
+  自带的 3.2（本机 /usr/bin/bash 甚至不存在，实际命中 /bin/bash 3.2.57），写脚本
+  时按 3.2 口径直接写对（加花括号），不要赌运行环境。
 
 ## 模板串里生成 shell 的规范（TS/JS × bash）
 
@@ -56,6 +59,7 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）与 s
 2. **模板串内嵌 markdown 行内代码的反引号会提前终止字符串**——报 missing required property 或 Expression expected。要么全部转义，要么改用单引号字符串。
 3. **edit 的 old_string 从 read 输出原样复制**，禁止凭记忆重打——全角/半角标点（半角逗号 vs 全角逗号、半角冒号 vs 全角冒号）差异必致匹配失败。
 4. **bash 片段改完立即 bash -n 语法检查再投入使用**；重要脚本过 shellcheck（本机 0.11.0，`shellcheck -S style <file>`）。
+5. **模板串里写含反斜杠的代码（C++ 字符串字面量、Windows 注册表/文件路径等）**：模板串 `\\` 落盘只剩一个反斜杠，C++ `L"Software\Chaoset"` 里的 `\C` 是非法转义——编译器只给警告、注册表键名被静默改错（功能失效而非编译失败，交叉编译 CI 抓不到）。写时源码层要翻倍（TS 里写四道杠落盘两道杠），落盘后必须用 grep 工具核对实际字节（与既有同类代码逐字节对照）；注释里的路径不经过转义、无需翻倍，只有**代码字符串字面量**受影响。mingw 本机可用时，单文件 `-fsyntax-only -std=c++17 -DUNICODE` 是秒级兜底。
 
 ## macOS/BSD 工具链与解析规范
 

@@ -83,6 +83,12 @@ gh run rerun <run-id>                   # 怀疑 flaky 时重跑同一 run
 
 - 长等待（macOS runner 排队可达十几分钟）：把 `gh pr checks --watch` 用后台 job 跑，期间继续做其他项目/其他 PR 的工作，用 `job_output` 收结果；不要用 sleep 空转。
 - **同一个 PR 连续推送会取消旧 run**（CI 通常配了 concurrency）——等最新 commit 的 run 即可，旧 run cancelled 属正常。
+- **job 稳定 15m 左右失败且无日志＝runner 容量问题，不是代码问题**：判据是
+  `gh run view <run-id>` 的 ANNOTATIONS 出现「The job was not acquired by Runner of
+  type hosted even after multiple attempts」+「capacity constraints」（macOS arm64
+  常见），check-run conclusion 为 cancelled、`gh run view --job` 报 log not found
+  （job 根本没启动）。处置：间隔重跑 `gh run rerun <run-id> --failed`（可后台挂
+  延迟重试），其余平台 job 的结论仍然有效；不要为它改 workflow 或镜像源。
 - CI 卡在 apt/pip/npm 安装且耗时异常：先判断上游基础设施故障，不要改镜像源或构建流程（详见 `git-workflow` 的同名小节）。
 - 失败日志里出现与本次改动无关的既有红灯：先确认 main 上是否同样红；main 也红说明是存量问题，单独修 CI 的 PR 处理，不要混进本 PR。
 

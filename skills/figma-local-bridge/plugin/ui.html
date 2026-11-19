@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 10px 12px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 12px;
+    background: #ffffff;
+    color: #24292f;
+    user-select: none;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #cf222e;
+    flex-shrink: 0;
+    transition: background 0.2s;
+  }
+  .status-text {
+    font-weight: 600;
+    font-size: 12px;
+    color: #cf222e;
+  }
+  .connected .dot { background: #1a7f37; }
+  .connected .status-text { color: #1a7f37; }
+  .detail {
+    margin-top: 5px;
+    font-size: 11px;
+    color: #57606a;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .hint {
+    margin-top: 2px;
+    font-size: 10px;
+    color: #8c959f;
+  }
+</style>
+</head>
+<body id="body">
+  <div class="row">
+    <span class="dot" id="dot"></span>
+    <span class="status-text" id="status">正在连接 Bridge...</span>
+  </div>
+  <div class="detail" id="detail">ws://127.0.0.1:8787</div>
+  <div class="hint" id="hint">保持此窗口开启即保持自动通道</div>
+
+  <script>
+    var WS_URL = 'ws://127.0.0.1:8787';
+    var ws = null;
+    var body = document.getElementById('body');
+    var statusEl = document.getElementById('status');
+    var detailEl = document.getElementById('detail');
+    var hintEl = document.getElementById('hint');
+
+    function updateState(connected, title, detail, hint) {
+      if (connected) {
+        body.classList.add('connected');
+      } else {
+        body.classList.remove('connected');
+      }
+      statusEl.textContent = title;
+      if (detail !== undefined) detailEl.textContent = detail;
+      if (hint !== undefined) hintEl.textContent = hint;
+    }
+
+    function connect() {
+      try {
+        ws = new WebSocket(WS_URL);
+      } catch (e) {
+        updateState(false, '连接异常', e && e.message ? e.message : 'WebSocket 错误', '请检查 8787 端口服务');
+        setTimeout(connect, 3000);
+        return;
+      }
+
+      ws.onopen = function() {
+        updateState(true, '● Figma Local Bridge 已连接', '通道已建立 (127.0.0.1:8787)', '保持窗口开启即可由外部调用');
+        parent.postMessage({ pluginMessage: { type: 'ws-open' } }, '*');
+      };
+
+      ws.onmessage = function(ev) {
+        try {
+          var data = JSON.parse(ev.data);
+          parent.postMessage({ pluginMessage: { type: 'ws-message', data: data } }, '*');
+        } catch (e) {}
+      };
+
+      ws.onclose = function() {
+        updateState(false, '○ Bridge 未连接', '尝试重连 ws://127.0.0.1:8787...', '请先启动 bridge 服务');
+        parent.postMessage({ pluginMessage: { type: 'ws-close' } }, '*');
+        setTimeout(connect, 2000);
+      };
+
+      ws.onerror = function() {
+        try { ws.close(); } catch(e) {}
+      };
+    }
+
+    window.onmessage = function(ev) {
+      var msg = ev.data && ev.data.pluginMessage;
+      if (!msg) return;
+      if (msg.type === 'send' && ws && ws.readyState === 1) {
+        try { ws.send(JSON.stringify(msg.data)); } catch (e) {}
+      }
+      if (msg.type === 'activity') {
+        detailEl.textContent = msg.text;
+      }
+    };
+
+    connect();
+  </script>
+</body>
+</html>
