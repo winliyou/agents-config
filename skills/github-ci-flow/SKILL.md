@@ -67,8 +67,7 @@ git branch -d <type>/<slug>
    - **日志类**直接 fenced 贴正文（含失败码、request id、关键字段），长日志截取相关片段；
    - **截图先用 `sips --resampleWidth 540`（或等价工具）压缩，单张 ≤300KB**，优先提交进仓库
      （建议 `.github/pr-evidence/<分支slug>/`，项目已有约定则从项目约定），正文用 raw 链接内联：
-     `https://raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>`；合并后把 `<ref>` 从分支名切到默认分支
-     （`main`），保证分支删除后图片仍可查看；
+     `https://raw.githubusercontent.com/<owner>/<repo>/<sha>/<path>`；`<sha>` 用证据提交的 commit SHA（**不要用分支名**：合并删分支后 404，带 `/` 的分支名 GitHub 直接解析失败）；
    - 仓库不适合入库图片时（私有仓库体积、平台限制、无法提交二进制）：把压缩图放临时目录并在正文列路径清单，
      说明「由作者在 PR 网页端拖拽上传」；或贴外部图床链接。**gist 等只支持文本的通道不能放图片**，不要尝试；
    - 纯文档/注释改动可省略截图，但「背景/问题」与「验证」两段不可省。
@@ -125,7 +124,22 @@ git branch -d <type>/<slug>
 ```
 
 - 只有「改后」、用设计稿冒充「改后实拍」（纯设计稿 PR 除外）、两张图尺寸不一致，都按证据不足处理，PR 不算完成。
-- 路径固定 `.github/pr-evidence/<分支slug>/`（项目有约定从项目），入库后以 raw 链接内联，合并后把 ref 切到默认分支。
+- 路径固定 `.github/pr-evidence/<分支slug>/`（项目有约定从项目）。
+- **raw 链接的 ref 用 commit SHA**：`https://raw.githubusercontent.com/<owner>/<repo>/<sha>/<path>`。用分支名做 ref 必然出问题——PR 合并后分支被删，链接永久 404；带 `/` 的分支名（如 `feat/android-publish`）raw 路径直接解析失败，实测 404（文件其实就在默认分支上）。SHA 是内容寻址，合并、删分支、改名都不受影响，也不需要合并后再改正文。
+- **没法截图时不许留空**：写明「无 Before：<具体原因>」（无设备、无模拟器、改动不可视），并用替代证据补位——单测用例名与断言、logcat/dump 片段、设计稿对照。用「纯 Compose 实现，无第三方依赖」这类与证据无关的描述充数，按证据不足处理。
+
+一步到位的最小取证片段（截图 → 压缩 → 入库 → 生成 SHA 链接）：
+
+```bash
+slug=feat-android-settings            # 与分支同名，斜杠换横线
+mkdir -p .github/pr-evidence/$slug
+adb -s <serial> exec-out screencap -p > .github/pr-evidence/$slug/android-settings.png
+sips --resampleWidth 540 .github/pr-evidence/$slug/android-settings.png --out .github/pr-evidence/$slug/android-settings.png
+git add .github/pr-evidence/$slug && git commit -m "文档(证据): 采集 UI 改动前后对比截图"
+repo=$(git remote get-url origin | sed -E 's#.*github\.com[:/]##; s#\.git$##')
+sha=$(git rev-parse HEAD)
+echo "https://raw.githubusercontent.com/$repo/$sha/.github/pr-evidence/$slug/android-settings.png"
+```
 
 ### 把 PR 写成创造过程档案
 
