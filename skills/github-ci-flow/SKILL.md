@@ -178,7 +178,7 @@ PR 是日后回看「当时为什么这么做」的唯一入口，正文要比 d
 - **免图声明**：正文写 `pr-evidence: n/a <至少 6 个字的原因>`（例如「仅调整日志文案，无可见界面变化」），工具认这一行放行；空话或过短的理由不算。
 - **基线**：默认 `origin/main` 的 merge-base（`origin/master` 同理）；没有远程时退化到 `HEAD~1`，再退到根提交，避免首次提交就报错。
 - **复核方式**：`~/.agents/bin/pr-evidence-check --body <正文>` 的 stdout 与退出码就是证据，收进 PR 的「验证」段时贴这两行即可。
-- **尚未硬化的地方**：门禁发生在「本地建 PR 时」，由 agent 自觉调用；要让 GitHub 侧也拦住（他人或别的 agent 建的 PR），需要给仓库装一个读 `pull_request.body` 的 workflow —— 这一步还没落地，别声称已有 CI 拦截。
+- **门禁范围**：只覆盖「dsh 在本地建 PR」这条路径——执行者调 `pr-evidence-check`，退出码非 0 不建 PR。网页端、其他 agent、其他工具建的 PR 不在此范围，**不要为此往仓库塞读 `pull_request.body` 的 workflow**（维护成本高于收益）；已合并的历史 PR 也不回填。
 ## 本地 vs CI 分工
 
 | 本地（提交前，秒级） | GitHub Actions（权威门禁） |
