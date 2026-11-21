@@ -67,11 +67,15 @@ git branch -d <type>/<slug>
 2. **改动**：按模块列点并标关键文件；不复述 diff 里已能看出的细节。
 3. **证据**：截图 / 录屏 / 日志 / 接口返回，尽量给前后对比；**UI 与交互类改动必须给 Before / After**（判定口径与采集见下节「UI / 交互类改动」）：
    - **日志类**直接 fenced 贴正文（含失败码、request id、关键字段），长日志截取相关片段；
-   - **截图先用 `sips --resampleWidth 540`（或等价工具）压缩，单张 ≤300KB**，优先提交进仓库
-     （建议 `.github/pr-evidence/<分支slug>/`，项目已有约定则从项目约定），正文用 raw 链接内联：
-     `https://raw.githubusercontent.com/<owner>/<repo>/<sha>/<path>`；`<sha>` 用证据提交的 commit SHA（**不要用分支名**：合并删分支后 404，带 `/` 的分支名 GitHub 直接解析失败）；
-   - 仓库不适合入库图片时（私有仓库体积、平台限制、无法提交二进制）：把压缩图放临时目录并在正文列路径清单，
-     说明「由作者在 PR 网页端拖拽上传」；或贴外部图床链接。**gist 等只支持文本的通道不能放图片**，不要尝试；
+   - **截图用 `gh` 的 `--attach` 上传，不提交进仓库**：先压缩（`sips --resampleWidth 540` 或
+     `~/.agents/bin/pr-evidence` 的 `shrink`，单张 ≤300KB），正文照常写 `![改前](./before.png)`，建 PR 时把本地文件一并 attach：
+     `gh pr create --body-file <正文> --attach 'before.png#改前' --attach 'after.png#改后'`。
+     gh 按文件名把正文里的本地路径替换成附件地址（`https://github.com/user-attachments/assets/<uuid>`），
+     合并、删分支都不影响这条地址；
+   - **`--attach` 必须与正文写入在同一条命令里**：上传不可撤销，且附件未被 PR 引用时匿名访问是 404——
+     命令失败就等于留下永久死链；一次最多 50 个文件，图片上限 10MB、视频 100MB，需要仓库 WRITE 权限；
+   - 追加到已有 PR：`gh pr comment <PR> --body "…" --attach "…"`（`gh pr edit <PR> --attach "…"` 同理）；
+     **gist 不接受二进制**（`binary file not supported`），不要用 gist 托管图片；
    - 纯文档/注释改动可省略截图，但「背景/问题」与「验证」两段不可省。
 4. **验证**：CI 结论（job 数、是否全绿、run 链接）+ 本地构建/单测/静态检查结论 + 端上/浏览器走查要点；
    写明未覆盖项与已知风险。
@@ -118,32 +122,36 @@ git branch -d <type>/<slug>
 
 | 状态 | Before（`main`） | After（本 PR） |
 |---|---|---|
-| 默认态 | ![before](<raw 链接>) | ![after](<raw 链接>) |
-| 展开 + hover | ![before](<raw 链接>) | ![after](<raw 链接>) |
-| 空态 | ![before](<raw 链接>) | ![after](<raw 链接>) |
+| 默认态 | ![before](<附件地址>) | ![after](<附件地址>) |
+| 展开 + hover | ![before](<附件地址>) | ![after](<附件地址>) |
+| 空态 | ![before](<附件地址>) | ![after](<附件地址>) |
 
 设计稿：<链接 / 节点号>；实现与稿子的差异：<逐条列出并说明是否有意为之>
 ```
 
 - 只有「改后」、用设计稿冒充「改后实拍」（纯设计稿 PR 除外）、两张图尺寸不一致，都按证据不足处理，PR 不算完成。
-- 路径固定 `.github/pr-evidence/<分支slug>/`（项目有约定从项目）。
-- **raw 链接的 ref 用 commit SHA**：`https://raw.githubusercontent.com/<owner>/<repo>/<sha>/<path>`。用分支名做 ref 必然出问题——PR 合并后分支被删，链接永久 404；带 `/` 的分支名（如 `feat/android-publish`）raw 路径直接解析失败，实测 404（文件其实就在默认分支上）。SHA 是内容寻址，合并、删分支、改名都不受影响，也不需要合并后再改正文。
+- **证据图不进仓库**：截图只存在本地临时目录（`.workwork/evidence/`，随任务清理）与 GitHub 附件存储，
+  不写进 `.github/pr-evidence/` 之类路径，也不为采集截图单独提交。仓库里出现一次性截图按错误处理、应当删除。
+- **正文与附件一一对应**：正文引用几张就 `--attach` 几张，文件名保持可辨识（`before-*.png` / `after-*.png`）；
+  同一张图在正文重复引用会复用同一个附件地址。
 - **取图有优先级，够用即止**：本地能跑 → 设备/模拟器 → 线上已部署版本 → 已有设计稿；哪条成本低走哪条，拿到一张能说明前后差异就停，不追求多角度、多尺寸的完美组图。
 - **拿不到就别硬耗**：一条路试一次（最多 5 分钟）不通就停，别反复折腾模拟器、镜像、驱动或网络。直接在正文写「无 Before：<具体原因>」（无设备/无模拟器/环境起不来/改动不可视），并用替代证据补位——单测用例名与断言、logcat/dump 片段、设计稿对照。
 - **理由要具体，不许糊弄**：「纯 Compose 实现，无第三方依赖」「已本地验证」这类与证据无关的话按证据不足处理；写的必须是可复核的事实（设备未连接、模拟器启动失败的原样报错等）。
 
-一步到位的最小取证片段（截图 → 压缩 → 入库 → 生成 SHA 链接）：
+一步到位的最小取证片段（截图 → 压缩 → 建 PR 时 attach）：
 
 ```bash
-slug=feat-android-settings            # 与分支同名，斜杠换横线
-mkdir -p .github/pr-evidence/$slug
-adb -s <serial> exec-out screencap -p > .github/pr-evidence/$slug/android-settings.png
-sips --resampleWidth 540 .github/pr-evidence/$slug/android-settings.png --out .github/pr-evidence/$slug/android-settings.png
-git add .github/pr-evidence/$slug && git commit -m "文档(证据): 采集 UI 改动前后对比截图"
-repo=$(git remote get-url origin | sed -E 's#.*github\.com[:/]##; s#\.git$##')
-sha=$(git rev-parse HEAD)
-echo "https://raw.githubusercontent.com/$repo/$sha/.github/pr-evidence/$slug/android-settings.png"
+mkdir -p .workwork/evidence
+adb -s <serial> exec-out screencap -p > .workwork/evidence/before-settings.png
+sips --resampleWidth 540 .workwork/evidence/before-settings.png --out .workwork/evidence/before-settings.png
+
+# 正文里照常写本地路径：![改前](.workwork/evidence/before-settings.png)
+gh pr create --draft --title "…" --body-file .workwork/pr-body-<任务>.md \
+  --attach '.workwork/evidence/before-settings.png#改前：设置页' \
+  --attach '.workwork/evidence/after-settings.png#改后：设置页'
 ```
+
+正文里的相对路径按 `--body-file` 所在目录解析，找不到再回退到当前工作目录。
 
 ### 把 PR 写成创造过程档案
 
@@ -160,25 +168,29 @@ PR 是日后回看「当时为什么这么做」的唯一入口，正文要比 d
 
 ## 证据图门禁：`pr-evidence`
 
-`~/.agents/bin/pr-evidence`（Node 实现，源码同名 `.mjs`）把「有没有图、图能不能打开」变成退出码，是 UI 类改动开 PR 前的硬门禁：
+`~/.agents/bin/pr-evidence`（Node 实现，源码同名 `.mjs`）把「有没有图、图能不能打开」变成退出码，是 UI 类改动开 PR 前后的硬门禁：
 
 ```bash
-~/.agents/bin/pr-evidence-check --body .workwork/pr-body-<任务>.md   # 在 worktree 根目录跑
-~/.agents/bin/pr-evidence capture <分支slug> <截图...>              # 压缩+入库+打印 SHA 直链
+~/.agents/bin/pr-evidence shrink <截图...>                         # 压缩到 .workwork/evidence/
+~/.agents/bin/pr-evidence-check --body .workwork/pr-body-<任务>.md  # 建 PR 前：查正文引用与本地文件
+gh pr view <PR> --json body --jq .body > /tmp/body.md
+~/.agents/bin/pr-evidence-check --body /tmp/body.md --post         # 建 PR 后：查真实附件地址
 ```
 
 | 退出码 | 含义 | 处置 |
 |---|---|---|
-| 0 | 通过（无 UI 改动 / 有可用图 / 已声明免图） | 继续 `gh pr create` |
-| 1 | UI 改动但正文没有任何图 | `capture` 归档后重跑 |
-| 2 | 有图但链接打不开（404/相对路径） | 换 SHA 直链后重跑 |
+| 0 | 通过（无 UI 改动 / 有可用图 / 已声明免图） | 继续 |
+| 1 | UI 改动但正文没有任何图 | `shrink` 压缩后补正文，或声明免图 |
+| 2 | 图不可用（本地文件缺失 / 远程非 200） | 按提示修：补文件、或确认建 PR 时带了 `--attach` |
 | 64 | 用法错误（缺 `--body`、目录不对） | 修命令 |
 
 - **UI 判定**：改动文件命中 `(^|/)(ui|res/layout|res/values|res/drawable|components|pages|views|screens|theme|styles)/` 或 `*.svelte|vue|tsx|jsx|css|scss|less|html|storyboard|xib|qml`，且不落在 `test/`、`build/`、`.github/pr-evidence/`、`*.md|json|yml` 等跳过路径。命中即要求证据图。
 - **免图声明**：正文写 `pr-evidence: n/a <至少 6 个字的原因>`（例如「仅调整日志文案，无可见界面变化」），工具认这一行放行；空话或过短的理由不算。
 - **基线**：默认 `origin/main` 的 merge-base（`origin/master` 同理）；没有远程时退化到 `HEAD~1`，再退到根提交，避免首次提交就报错。
-- **复核方式**：`~/.agents/bin/pr-evidence-check --body <正文>` 的 stdout 与退出码就是证据，收进 PR 的「验证」段时贴这两行即可。
+- **复核方式**：`pr-evidence-check` 的 stdout 与退出码就是证据，收进 PR 的「验证」段时贴这两行即可。建 PR 前的 `check` 只看本地文件是否就位，**建完 PR 必须用 `--post` 复核一次**——它带 token 校验附件地址，才能证明正文里真的是可访问的图而不是 404 死链。
+- **附件校验要带 token**：`user-attachments` 地址在附件未被公开 PR 引用前匿名访问是 404，匿名探测会误判成破图；工具已自动对 `github.com` 域附加 `gh auth token`。
 - **门禁范围**：只覆盖「dsh 在本地建 PR」这条路径——执行者调 `pr-evidence-check`，退出码非 0 不建 PR。网页端、其他 agent、其他工具建的 PR 不在此范围，**不要为此往仓库塞读 `pull_request.body` 的 workflow**（维护成本高于收益）；已合并的历史 PR 也不回填。
+
 ## 本地 vs CI 分工
 
 | 本地（提交前，秒级） | GitHub Actions（权威门禁） |
