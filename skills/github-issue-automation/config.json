@@ -1,0 +1,32 @@
+{
+  "roots": ["/Users/liyou/work"],
+  "extraRepos": [],
+  "excludeRepos": [],
+  "trustedAssociations": ["OWNER", "MEMBER", "COLLABORATOR"],
+  "trustedLogins": [],
+  "ignoredLogins": ["dependabot[bot]", "github-actions[bot]", "renovate[bot]", "codecov[bot]"],
+  "scan": {
+    "overlapSeconds": 21600,
+    "maxEventsPerRun": 1,
+    "maxQueue": 30,
+    "maxIssuesPerRepo": 200,
+    "maxLookbackDays": 14
+  },
+  "agent": {
+    "timeoutMinutes": 45,
+    "maxAttempts": 3,
+    "retryDelayMinutes": 20,
+    "permissionMode": "workspace-write",
+    "approvalPolicy": "never",
+    "dshPath": "/Users/liyou/.bun/bin/dsh"
+  },
+  "publish": {
+    "reopenClosed": true,
+    "draftPR": false,
+    "marker": "<!-- dsh-issue-agent -->",
+    "skipExisting": true,
+    "maxCommentChars": 8000
+  },
+  "stateDir": "/Users/liyou/.agents/.state/github-issue-automation",
+  "logDir": "/Users/liyou/.agents/.state/github-issue-automation/runs"
+}

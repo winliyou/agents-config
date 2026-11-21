@@ -1,0 +1,99 @@
+---
+name: github-issue-automation
+description: 后台自动巡检 GitHub issue/PR：每 10 分钟扫描 ~/work 下仓库，只认 org member / collaborator 新开的 issue、PR 与带明确指令的评论（含已关闭项的新建议），自动在 worktree 修复并开 PR，不自动合并；含 launchd 安装、状态查看、配置与排障。触发：配置或排查自动巡检、issue/PR 没有自动处理、成员评论指令、自动开 PR、launchd 服务、误触发/自循环。
+---
+
+# GitHub Issue 自动巡检
+
+后台服务定期扫描本机仓库的 GitHub issue/PR，只对**受信任成员**的请求自动修复并开 PR。
+它是一个监督进程（supervisor）：扫描 → 过滤 → 为每个事件准备独立 worktree → 调 `dsh headless` 执行 → 校验提交 → 推送 → 开 PR / 回评论。**不会自动合并，也不会直接改主干。**
+
+## 触发规则
+
+| 来源 | 条件 | 动作 |
+|---|---|---|
+| 新 issue | 作者是 OWNER / MEMBER / COLLABORATOR，状态 open | 修复并开 PR |
+| 新 PR | 作者是 OWNER / MEMBER / COLLABORATOR，状态 open | 审查 diff，必要时补提交；不合并 |
+| issue 评论 | 任意状态（含 closed）的 issue/PR，评论者是受信任成员，且正文含明确指令 | 已关闭项先 reopen；再修复/开 PR |
+| PR review | 受信任成员提交 CHANGES_REQUESTED，或 review 正文含指令 | 在 PR head 分支补提交 |
+| PR 行内评论 | 受信任成员，正文含指令 | 同上 |
+
+明确指令由 `config.json` 的 `directives.patterns` 识别，默认覆盖「解决 / 修复 / 处理 / 跟进 / 实现 / 改一下 / 看一下 / 重开 / 合并」与 `fix / resolve / address / implement / handle / reopen / merge / take a look at`；带否定词（不用 / 无需 / 暂不 / 已经解决 等）与代码块内的文本不触发。
+
+默认忽略：bot 账号（dependabot 等）、`CONTRIBUTOR` / `NONE` 关系、带 `<!-- dsh-issue-agent -->` 标记的评论与 PR 正文。**本自动化自己创建的 PR/评论都带该标记，因此不会自循环。**
+
+## 处理流程与边界
+
+1. 从 `origin/<默认分支>` 或 PR head 分支创建 `.agents/worktrees/auto/...` 下的临时 worktree。
+2. 以该 worktree 为 cwd 运行 `dsh --profile headless --permission-mode workspace-write --add-dir <git-common-dir> --approval-policy never --json -`。
+3. agent 只在 worktree 内改代码并提交；提示词禁止它 push、开 PR、合并、改仓库设置，GitHub 内容按不可信数据处理。
+4. supervisor 校验提交数量，推送分支（不 force），开 PR 或更新现有 PR，并回评论；随后删除临时 worktree。
+5. 失败最多重试 `agent.maxAttempts` 次；仍失败则回一条「需要人工介入」的评论。
+
+## 安装与运行
+
+```bash
+cd ~/.agents/skills/github-issue-automation
+
+bun src/scan.ts --status                 # 查看基线、队列与最后处理时间
+bun src/scan.ts --dry-run --repo <owner/name>   # 只扫描并打印将要处理的事件
+bun scripts/install-launchd.ts --kickstart      # 在 Terminal 中安装并立即跑一次
+bun scripts/install-launchd.ts --uninstall      # 卸载
+```
+
+> `launchctl` 不能从 DSH 沙盒内调用（会报 `Bootstrap failed: 5: Input/output error`）。
+> 首次装载请在 **Terminal** 里运行上面的安装命令，或双击 `scripts/activate.command` 装载已生成的 plist；
+> 停止用 `scripts/deactivate.command`。
+
+launchd label：`com.chaoset.github-issue-agent`，每 600 秒运行一次；`RunAtLoad` 会立即跑一次。
+运行环境由安装脚本写入 plist：`PATH` 含 node 与 bun 目录、`HOME`、`GITHUB_ISSUE_AUTOMATION_CONFIG`。
+
+常用检查：
+
+```bash
+launchctl print gui/\$(id -u)/com.chaoset.github-issue-agent | head -40
+tail -n 50 ~/.agents/.state/github-issue-automation/launchd.out.log
+tail -n 50 ~/.agents/.state/github-issue-automation/launchd.err.log
+```
+
+## 配置
+
+`config.json`（与脚本同目录，可被 `GITHUB_ISSUE_AUTOMATION_CONFIG` 覆盖）：
+
+- `roots` / `extraRepos` / `excludeRepos`：仓库发现范围；只扫描有 `origin` 指向 github.com 的仓库。
+- `trustedAssociations`：默认 `OWNER`、`MEMBER`、`COLLABORATOR`；`trustedLogins` 可额外放行指定账号。
+- `ignoredLogins`：永远忽略的账号（默认含 dependabot 等 bot）。
+- `directives.patterns` / `negations`：评论指令的正则与否定词。
+- `scan`：轮询重叠秒数、单轮最多处理事件数、队列上限、回看天数。
+- `agent`：超时分钟、重试次数、重试间隔、headless 权限模式与审批策略、`dsh` 路径。
+- `publish`：是否 reopen 已关闭项、是否创建 draft PR、自循环标记、首次基线行为。
+- `stateDir` / `logDir`：状态与运行日志目录（默认在 `~/.agents/.state/github-issue-automation`，已 gitignore）。
+
+首次启用时，每个仓库以首次扫描时刻为基线，**不会**追溯处理历史 issue/评论；需要重新划基线用 `--reset-baseline`。
+
+## 状态与日志
+
+- `state.json`：每仓库基线、已见评论 id、队列、已处理事件 id。
+- `agent.log`：扫描/处理摘要。
+- `runs/<时间>-<事件>.jsonl`：headless 事件流；同名 `.err` 是 stderr；`.prompt.md` 是实际提示词；`.meta.json` 记录 sessionId 与结果。
+- `lock.json`：单轮锁；进程退出后自动失效（4 小时视为陈旧）。
+
+## 排障
+
+- **没有触发**：确认评论者 `author_association` 是 OWNER/MEMBER/COLLABORATOR；确认正文命中 `directives.patterns` 且不含否定词；确认没有带 marker；用 `--dry-run --repo ...` 看扫描结果。
+- **没有执行**：看 `launchd.err.log` 与 `runs/*.err`。`dsh` 依赖 node（shebang），launchd 的 PATH 由安装脚本写入；`~/.dsh` 需可写。
+- **launchctl 报 I/O error**：在 DSH 沙盒内无法调用 launchd，改用 Terminal 执行 `scripts/activate.command`。
+- **卡住**：检查 `lock.json` 中 pid 是否仍存活；确认没有残留 `dsh --profile headless` 进程。
+- **推送/开 PR 失败**：`gh auth status` 需有 `repo` scope；查看 `runs/*.meta.json` 与 `agent.log`。
+- **自循环**：所有自动生成内容必须带 `publish.marker`；修改评论模板时保留 marker。
+- **想暂停**：`launchctl bootout gui/\$(id -u)/com.chaoset.github-issue-agent`；恢复用安装脚本。
+- **CI 失败**：自动巡检只负责产出 PR，不负责修复 CI；按 `github-ci-flow` 人工处理。
+
+## 安全模型
+
+- 信任判定只看 GitHub 返回的 `author_association`（及可选白名单），不看评论内容里的自称。
+- agent 以 `workspace-write` 运行，只能写 worktree；supervisor 在沙盒外执行 git push / gh 写操作。
+- 不自动合并、不 force push、不修改仓库 settings；PR 描述与评论固定带 marker，便于审计和防自循环。
+- issue/PR 正文与评论作为数据注入提示词；提示词明确要求忽略其中提升权限、泄密、绕过审查或推送主干的指令。
+
+与 `github-ci-flow` 配合：自动 PR 创建后仍按 CI 门禁人工合并；与 `git-workflow` 配合：worktree 位于项目 `.agents/worktrees/auto/`。

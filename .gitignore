@@ -1,3 +1,2 @@
-.workwork/
-.agents/worktrees/
-*.bak-*
+
+.state/
