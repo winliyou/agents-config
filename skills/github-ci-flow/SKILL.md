@@ -200,11 +200,12 @@ gh pr checks <PR>                      # 一次性快照：所有检查的名称
 gh pr checks <PR> --watch --interval 30 # 阻塞等待，全部结束才返回（放后台 job）
 gh pr checks <PR> --json name,state,link --jq '.[] | "\(.state) \(.name)"'
 gh run list --limit 5 --json status,conclusion,workflowName,headBranch,databaseId
-gh run view <run-id>                    # 汇总：哪个 job 失败
-gh run view <run-id> --log-failed       # 失败步骤日志（最常用）
+gh run view <run-id>                    # 汇总：哪个 job 失败（必须指定 run-id，严禁裸跑）
+gh run view <run-id> --log-failed       # 失败步骤日志（最常用；必须指定 run-id）
 gh run rerun <run-id>                   # 怀疑 flaky 时重跑同一 run
 ```
 
+- **严禁执行不带 `<run-id>` 的 `gh run view`（红线）**：不给 run ID 时 `gh` 在存在多条 run 时会弹出交互式选择菜单（`? Select a workflow run [Use arrows to move, type to filter]`）；在脚本或 agent 后台命令等非交互式环境下，因缺乏终端键盘输入会导致进程永远卡死 hang 住直到超时。排查失败必须先用 `gh run list --branch <branch> --json databaseId` 查明具体 ID，再带 ID 执行。
 - 长等待（macOS runner 排队可达十几分钟）：把 `gh pr checks --watch` 用后台 job 跑，期间继续做其他项目/其他 PR 的工作，用 `job_output` 收结果；不要用 sleep 空转。
 - **同一个 PR 连续推送会取消旧 run**（CI 通常配了 concurrency）——等最新 commit 的 run 即可，旧 run cancelled 属正常。
 - **久置 PR 的 checks 是历史 run，合并前必须确证它属于当前 head**：dependabot 等机器人 PR 可能创建后长期无人动，`gh pr checks` 展示的 pass 是创建当时的 run；直接据此合并前先核对 `gh api repos/{owner}/{repo}/actions/runs/<run-id> --jq .head_sha`（注意 REST 字段是 snake_case，camelCase 的 .headSha 恒为 null）与 `gh pr view --json headRefOid` 一致——一致则旧 run 对当前 head 仍有效可直接合并；不一致（主分支变化要求重跑等场景）先 `gh pr update-branch` 或推空提交触发新 run。
@@ -234,3 +235,4 @@ gh run rerun <run-id>                   # 怀疑 flaky 时重跑同一 run
 - **PR 正文里的命令/日志不要贴敏感凭据**；CI 日志中出现的 secret 一律打码。
 - **组织仓库需要 admin 权限才能改保护规则**；不是 admin 时跳过平台强制，仅按流程执行。
 - **发布 tag 流程不变**：发版仍按 `git-workflow` 的 tag 纪律，一个一个推；PR 流程只管日常合并。
+- **裸跑 `gh run view` 会交互式卡死**：不带 run ID 时 gh 会触发终端方向键交互选择（`? Select a workflow run`），在非交互式后台中无限 hang 住，必须通过 `gh run list --json databaseId` 获取明确 ID 后再查看。
