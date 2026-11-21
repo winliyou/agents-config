@@ -1,6 +1,6 @@
 ---
 name: github-ci-flow
-description: GitHub Actions 门禁优先的开发流程：开发分支推送到 GitHub → 开 PR → gh 检测 CI 状态 → 全绿后 rebase 合并 → 清理分支与 worktree。触发：需要提交改动并验证、决定本地跑哪些检查、把编译/测试等重活移到 GitHub、创建/合并 PR、等待或排查 Actions 结果、推送开发分支与清理远程分支、CI 红灯诊断。
+description: GitHub Actions 门禁优先的开发流程：开发分支推送到 GitHub → 开 PR（正文必带证据：截图/日志/排查记录）→ gh 检测 CI 状态 → 全绿后 rebase 合并 → 清理分支与 worktree。触发：需要提交改动并验证、决定本地跑哪些检查、把编译/测试等重活移到 GitHub、创建/合并 PR、写 PR/MR 描述与证据（截图、日志、走查记录）、等待或排查 Actions 结果、推送开发分支与清理远程分支、CI 红灯诊断。
 ---
 
 # GitHub CI 门禁流程（GitHub CI Flow）
