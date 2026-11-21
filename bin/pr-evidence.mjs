@@ -151,8 +151,9 @@ async function cmdCheck(argv) {
     } else if (post) {
       bad.push('仍是本地路径（gh --attach 未生效或正文没更新）+ ' + u);
     } else {
-      const abs = path.resolve(bodyDir, u);
-      if (fs.existsSync(abs)) local++;
+      // 与 gh --attach 一致：相对路径先按 --body-file 所在目录解析，再回退到工作目录
+      const candidates = [path.resolve(bodyDir, u), path.resolve(dir, u)];
+      if (candidates.some((p) => fs.existsSync(p))) local++;
       else bad.push('本地文件不存在 ' + u);
     }
   }
