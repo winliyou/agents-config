@@ -1,0 +1,37 @@
+#!/usr/bin/perl
+# 修复「把 \n 写进 -m 参数」导致的字面量换行。
+# 只在整条消息没有任何真实换行、且 \n 不像代码引用时才转换，其余原样放行。
+use strict;
+use warnings;
+
+my $file = shift // '';
+exit 0 unless $file && -f $file;
+
+open(my $in, '<:raw', $file) or exit 0;
+my $msg = do { local $/; <$in> };
+close $in;
+exit 0 unless defined $msg;
+
+exit 0 unless $msg =~ /\\[rn]/;    # 没有字面量 \r / \n，放行
+
+(my $core = $msg) =~ s/\n+\z//;
+exit 0 if index($core, "\n") >= 0;  # 已有真实换行：正常消息或正文里引用代码，不动
+
+# \n 后面紧跟引号/右括号，基本是在描述代码（如 split("\n")），不要动
+if ($core =~ /(?<!\\)\\[rn](?=["'`\)\]\}])/) {
+    warn "[commit-msg] 消息含字面量 \\n 且紧跟引号/括号，疑似代码引用，未转换。\n";
+    exit 0;
+}
+
+my $n = 0;
+$core =~ s/(?<!\\)\\r\\n/{ $n++; "\n" }/ge;
+$core =~ s/(?<!\\)\\n/{ $n++; "\n" }/ge;
+exit 0 unless $n;
+
+open(my $out, '>:raw', $file) or exit 1;
+print $out $core, "\n";
+close $out;
+
+warn "[commit-msg] 检测到 $n 处字面量 \\n，已自动转换为真实换行。\n";
+warn "[commit-msg] 建议改用：git commit -F - <<'EOF' … EOF\n";
+exit 0;

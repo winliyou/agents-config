@@ -1,0 +1,23 @@
+#!/bin/bash
+# DSH 全局 git hook 统一入口。
+# core.hooksPath 指向本目录后，git 不再直接调用仓库自带的 .git/hooks/*，
+# 这里先转发给仓库自带的同名 hook，再执行本目录的增强逻辑，避免把已有钩子顶掉。
+set -u
+
+name=${0##*/}
+[ "$name" = "_dispatch" ] && exit 0
+
+dir=$(cd "$(dirname "$0")" && pwd)
+
+if common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) &&
+   [ -n "$common" ] &&
+   [ -x "$common/hooks/$name" ] &&
+   [ "$(cd "$common/hooks" && pwd)/$name" != "$dir/$name" ]; then
+  "$common/hooks/$name" "$@" || exit $?
+fi
+
+case "$name" in
+  commit-msg) exec "$dir/commit-msg-guard" "$@" ;;
+esac
+
+exit 0

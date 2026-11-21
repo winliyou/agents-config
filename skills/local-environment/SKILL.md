@@ -33,6 +33,7 @@ description: 本机环境事实：macOS 路径、已装工具、凭据归档位�
   `~/Library/Caches/go-build`、`~/Library/Application Support/go`（GOENV 与遥测）已由
   sandbox-extra-roots 放行（desktop profile 已含该条），默认环境直接跑即可；
   报 EPERM 就把该目录加进插件配置（见 `sandbox-adaptation`），不要重定向。
+- **Git 全局提交钩子**：`~/.gitconfig` 里 `core.hooksPath = ~/.agents/git-hooks`；该目录下 `commit-msg`、`pre-commit` 等名字都是指向 `_dispatch` 的符号链接。`_dispatch` 先转发给仓库自带的 `.git/hooks/<name>`（不会顶掉仓库钩子），再跑本目录的增强逻辑：`commit-msg-guard` 把「整条消息没有真实换行、却含字面量 `\n`」的提交消息还原成真实换行（`\n` 紧跟引号/括号时按代码引用处理，不转换）。注意仓库若自己设了 `core.hooksPath`（如 `hotspot` 的 `.husky`），全局钩子不生效，需在该目录补同名入口（`hotspot` 里是符号链接到 `commit-msg-guard`，并进了 `.git/info/exclude`）。核验：`git config --global --get core.hooksPath`、`git -C <repo> rev-parse --git-path hooks`；扫历史：`~/.agents/bin/commit-msg-lint <rev-range>`。
 - ZCode（AI 编码工具，桌面 App + `zcode-cli` 后端）：会话数据在 `~/.zcode/cli/`——模型 IO 在 `rollout/model-io-sess_*.jsonl`（含工具调用的 `"command"` 与请求完成时间）、会话元数据在 `db/db.sqlite` 的 `session` 表（`directory` / `title` / `time_updated` / `last_outcome`）、按天日志 `log/zcode-<日期>.jsonl`；运行进程用 `ps -Ao pid,ppid,command | grep -i zcode` 查看。用于反查「某条命令/构建是谁跑的」。
 
 ## 网络与代理

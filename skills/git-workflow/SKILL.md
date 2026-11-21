@@ -73,6 +73,8 @@ Co-authored-by: <模型家族> <对应厂商非回复域>
 
 - **PR 描述末尾同样标注 harness 与模型**：body 末尾放一行「🤖 由 DeepSeek Harness（dsh）驱动，模型 `<模型名>`」加官方 badge（格式见 `dsh-badge` skill：shields.io 图 `powered_by-dsh-4D6BFE` 链接到 `https://github.com/deepseek-ai/deepseek-harness`，置末尾、不改配色）。
 
+- **提交消息里禁止出现字面量 `\n`**：`git commit -m "a\nb"` 在 bash/zsh 的普通引号里不转义，`\n` 两个字符会原样进提交对象（`git log` 里看到的 `\n` 是真字符，不是显示问题）；`echo "a\nb" > msg` 再用 `-F` 同样不可靠（bash 的 `echo` 默认不解释，zsh 默认解释，换 shell 结果相反）。判据：`git log -1 --format=%B <sha> | od -c | grep '\\   n'`，或 `~/.agents/bin/commit-msg-lint <range>` 批量扫。多用 `-F`；确要内联时用 `-m $'a\nb'` 或 `-m "$(printf 'a\nb')"`。本机已装全局 `commit-msg` 钩子（见 `local-environment`），会把「整条消息压成一行且含字面量 `\n`」自动还原成真实换行并在 stderr 提示——那是兜底，不要依赖它。
+
 - **多行/含引号的提交消息一律用 `-F <文件>`，不要内联 `-m`**：消息里出现 ASCII 双引号时，外层 shell 的双引号包裹会在第一个 `"` 处截断，`git commit` 静默失败或把消息剩余部分当独立命令执行——stdout 还常常是空的，极易误以为成功。安全做法：把消息写入临时文件后 `git commit -F <文件>`；提交后必须 `git log --oneline` + `git show --stat` 复核提交数与文件归属，不能只看命令退出与否。
 
   **临时文件必须落在被 gitignore 的目录内，且文件名带任务/日期唯一标识**：写 `.workwork/commit-msg-<任务>-<日期>.txt`（目录整体被忽略）是安全的；写成同前缀的**根目录文件** `.workwork-commit-msg.txt` 只差一个 `/`，却不在忽略规则内——`git add -A` 会把它一路带进提交。判据：临时文件路径的**父目录**必须出现在 `.gitignore` 里。**另一坑：固定文件名会读到别的会话残留**——`.workwork/commit-msg.txt` 这类通用名可能存着上次会话的旧消息，`commit -F` 静默提交错误信息还带着旧 trailer（实测发生：消息与 trailer 全是别的会话内容，已推送远程才被发现）。修复方式：分支无 PR 时 `git commit --amend -F <正确文件>` 后 `push --force-with-lease`。

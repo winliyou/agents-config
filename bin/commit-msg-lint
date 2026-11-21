@@ -1,0 +1,43 @@
+#!/usr/bin/perl
+# 检查提交消息里是否残留字面量 \n（本应是真实换行）。
+# 用法：commit-msg-lint [<rev-range>]
+#   默认范围：有 upstream 用 <upstream>..HEAD，否则只查 HEAD。
+# 退出码：0 干净；1 发现可疑提交。
+use strict;
+use warnings;
+
+my $range = $ARGV[0];
+if (!defined $range) {
+    my $up = `git rev-parse --abbrev-ref --symbolic-full-name '\@{u}' 2>/dev/null`;
+    chomp $up;
+    $range = $up ? "$up..HEAD" : 'HEAD';
+}
+
+open(my $fh, '-|', 'git', 'log', '--format=%H%x00%B%x00', $range)
+    or die "commit-msg-lint: git log 执行失败\n";
+local $/;
+my $out = <$fh>;
+close $fh;
+die "commit-msg-lint: git log 失败（不在 git 仓库内，或范围无效：$range）\n" if $?;
+
+my @items = split(/\0/, $out // '');
+my $bad = 0;
+while (@items >= 2) {
+    my ($sha, $msg) = splice(@items, 0, 2);
+    next unless defined $msg;
+    (my $core = $msg) =~ s/\n+\z//;
+    next if index($core, "\n") >= 0;          # 有真实换行：正常消息或多行 body
+    my $n = () = $core =~ /(?<!\\)\\n/g;
+    next unless $n;
+    my $subj = (split /\n/, $msg)[0];
+    $subj =~ s/\s+\z//;
+    printf "%s  %s\n", substr($sha, 0, 9), substr($subj, 0, 90);
+    $bad++;
+}
+
+if ($bad) {
+    print STDERR "发现 $bad 个提交的消息含字面量 \\n（应为真实换行）：$range\n";
+    print STDERR "修法：git rebase -i <base> 把目标提交标成 reword，或用 git commit -F - <<'EOF' 重写\n";
+    exit 1;
+}
+print "OK：$range 内没有字面量换行提交\n";
