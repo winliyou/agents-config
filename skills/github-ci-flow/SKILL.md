@@ -34,7 +34,9 @@ git add -A && git commit -F .workwork/commit-msg-<任务>.txt
 # 3) 推分支（允许且必须作为 PR head；不再「开发分支禁止推远程」）
 git push -u origin <type>/<slug>
 
-# 4) 立即开 PR（draft 即可，draft 同样触发 pull_request CI）
+# 4) 写正文 → 证据门禁 → 开 PR（draft 同样触发 pull_request CI）
+#    正文先按四段式写到 .workwork/pr-body-<任务>.md（UI 改动含 Before/After）
+~/.agents/bin/pr-evidence-check --body .workwork/pr-body-<任务>.md   # 非 0 退出不许建 PR
 gh pr create --draft --title "<中文标题>" --body-file .workwork/pr-body-<任务>.md
 
 # 5) 等待 CI（长等待用后台 job，不要前台干等）
@@ -126,7 +128,9 @@ git branch -d <type>/<slug>
 - 只有「改后」、用设计稿冒充「改后实拍」（纯设计稿 PR 除外）、两张图尺寸不一致，都按证据不足处理，PR 不算完成。
 - 路径固定 `.github/pr-evidence/<分支slug>/`（项目有约定从项目）。
 - **raw 链接的 ref 用 commit SHA**：`https://raw.githubusercontent.com/<owner>/<repo>/<sha>/<path>`。用分支名做 ref 必然出问题——PR 合并后分支被删，链接永久 404；带 `/` 的分支名（如 `feat/android-publish`）raw 路径直接解析失败，实测 404（文件其实就在默认分支上）。SHA 是内容寻址，合并、删分支、改名都不受影响，也不需要合并后再改正文。
-- **没法截图时不许留空**：写明「无 Before：<具体原因>」（无设备、无模拟器、改动不可视），并用替代证据补位——单测用例名与断言、logcat/dump 片段、设计稿对照。用「纯 Compose 实现，无第三方依赖」这类与证据无关的描述充数，按证据不足处理。
+- **取图有优先级，够用即止**：本地能跑 → 设备/模拟器 → 线上已部署版本 → 已有设计稿；哪条成本低走哪条，拿到一张能说明前后差异就停，不追求多角度、多尺寸的完美组图。
+- **拿不到就别硬耗**：一条路试一次（最多 5 分钟）不通就停，别反复折腾模拟器、镜像、驱动或网络。直接在正文写「无 Before：<具体原因>」（无设备/无模拟器/环境起不来/改动不可视），并用替代证据补位——单测用例名与断言、logcat/dump 片段、设计稿对照。
+- **理由要具体，不许糊弄**：「纯 Compose 实现，无第三方依赖」「已本地验证」这类与证据无关的话按证据不足处理；写的必须是可复核的事实（设备未连接、模拟器启动失败的原样报错等）。
 
 一步到位的最小取证片段（截图 → 压缩 → 入库 → 生成 SHA 链接）：
 
@@ -154,6 +158,27 @@ PR 是日后回看「当时为什么这么做」的唯一入口，正文要比 d
 
 边界：过程记录写进 PR 正文与 commit message，**不往仓库文档/注释里堆方案对比笔记**（见 AGENTS.md「方案选择」）。
 
+## 证据图门禁：`pr-evidence`
+
+`~/.agents/bin/pr-evidence`（Node 实现，源码同名 `.mjs`）把「有没有图、图能不能打开」变成退出码，是 UI 类改动开 PR 前的硬门禁：
+
+```bash
+~/.agents/bin/pr-evidence-check --body .workwork/pr-body-<任务>.md   # 在 worktree 根目录跑
+~/.agents/bin/pr-evidence capture <分支slug> <截图...>              # 压缩+入库+打印 SHA 直链
+```
+
+| 退出码 | 含义 | 处置 |
+|---|---|---|
+| 0 | 通过（无 UI 改动 / 有可用图 / 已声明免图） | 继续 `gh pr create` |
+| 1 | UI 改动但正文没有任何图 | `capture` 归档后重跑 |
+| 2 | 有图但链接打不开（404/相对路径） | 换 SHA 直链后重跑 |
+| 64 | 用法错误（缺 `--body`、目录不对） | 修命令 |
+
+- **UI 判定**：改动文件命中 `(^|/)(ui|res/layout|res/values|res/drawable|components|pages|views|screens|theme|styles)/` 或 `*.svelte|vue|tsx|jsx|css|scss|less|html|storyboard|xib|qml`，且不落在 `test/`、`build/`、`.github/pr-evidence/`、`*.md|json|yml` 等跳过路径。命中即要求证据图。
+- **免图声明**：正文写 `pr-evidence: n/a <至少 6 个字的原因>`（例如「仅调整日志文案，无可见界面变化」），工具认这一行放行；空话或过短的理由不算。
+- **基线**：默认 `origin/main` 的 merge-base（`origin/master` 同理）；没有远程时退化到 `HEAD~1`，再退到根提交，避免首次提交就报错。
+- **复核方式**：`~/.agents/bin/pr-evidence-check --body <正文>` 的 stdout 与退出码就是证据，收进 PR 的「验证」段时贴这两行即可。
+- **尚未硬化的地方**：门禁发生在「本地建 PR 时」，由 agent 自觉调用；要让 GitHub 侧也拦住（他人或别的 agent 建的 PR），需要给仓库装一个读 `pull_request.body` 的 workflow —— 这一步还没落地，别声称已有 CI 拦截。
 ## 本地 vs CI 分工
 
 | 本地（提交前，秒级） | GitHub Actions（权威门禁） |

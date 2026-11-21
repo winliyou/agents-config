@@ -1,0 +1,2 @@
+#!/bin/sh
+exec node "$HOME/.agents/bin/pr-evidence.mjs" "$@"
