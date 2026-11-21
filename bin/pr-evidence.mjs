@@ -21,6 +21,7 @@ const USAGE = [
   '  pr-evidence check   --body <pr-body.md> [--post] [--base <ref>] [--dir <repo>]',
   '  pr-evidence shrink  <image...> [--out <dir>]',
   '',
+  '大小上限（GitHub 附件）：图片 10MB / 视频 100MB / 单次 50 个',
   '证据图用 gh 的 --attach 上传，不提交进仓库：',
   '  gh pr create --body-file body.md --attach "before.png#改前" --attach "after.png#改后"',
   '正文照常写 ![](./before.png)，gh 会把本地路径替换成上传后的附件地址。',

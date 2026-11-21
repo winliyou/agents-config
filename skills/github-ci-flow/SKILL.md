@@ -67,8 +67,9 @@ git branch -d <type>/<slug>
 2. **改动**：按模块列点并标关键文件；不复述 diff 里已能看出的细节。
 3. **证据**：截图 / 录屏 / 日志 / 接口返回，尽量给前后对比；**UI 与交互类改动必须给 Before / After**（判定口径与采集见下节「UI / 交互类改动」）：
    - **日志类**直接 fenced 贴正文（含失败码、request id、关键字段），长日志截取相关片段；
-   - **截图用 `gh` 的 `--attach` 上传，不提交进仓库**：先压缩（`sips --resampleWidth 540` 或
-     `~/.agents/bin/pr-evidence` 的 `shrink`，单张 ≤300KB），正文照常写 `![改前](./before.png)`，建 PR 时把本地文件一并 attach：
+   - **大小上限以 GitHub 附件为准**：图片 **10MB**、视频 **100MB**、单次最多 **50 个**（超出后 gh 在本地就拒绝，服务端还会再校验）；
+     压到 540 宽只为加快 PR 页面加载，**不是硬性要求**；
+   - **截图用 `gh` 的 `--attach` 上传，不提交进仓库**：正文照常写 `![改前](./before.png)`，建 PR 时把本地文件一并 attach：
      `gh pr create --body-file <正文> --attach 'before.png#改前' --attach 'after.png#改后'`。
      gh 按文件名把正文里的本地路径替换成附件地址（`https://github.com/user-attachments/assets/<uuid>`），
      合并、删分支都不影响这条地址；
@@ -111,7 +112,7 @@ git branch -d <type>/<slug>
 2. **同条件才叫对比**：同视口尺寸与缩放（桌面 1440×900、移动端 390×844 一类，项目有既有口径从项目）、同主题、同数据、同状态。尺寸或主题不一致的两张图等于没对比。
 3. **多状态矩阵**：交互类至少覆盖「默认 + 关键交互态 + 异常态」；动画/过渡给 3–5 张关键帧序列，或录屏。
 4. **取图**：Web 走 `agent-browser`（命令面以 `agent-browser skills get core --full` 为准，headless 约定见 `browser-automation-safety`）；Android `adb -s <serial> exec-out screencap -p > shot.png`；鸿蒙 `hdc shell snapshot_display`；桌面端 `screencapture -x -o <file>`。
-5. **压缩**：`sips --resampleWidth 540 <in> --out <out>`（macOS 自带，实测 1024×1024、296KB 的 PNG 压到 540 宽后约 107KB），单张 ≤300KB。
+5. **压缩（可选，只为加载速度）**：`sips --resampleWidth 540 <in> --out <out>`（macOS 自带，实测 1024×1024、296KB 的 PNG 压到 540 宽后约 107KB）。硬上限是 GitHub 附件限制（图片 10MB），压不压、压多少都不影响能否上传。
 6. **拼图/录屏**：先 `command -v magick ffmpeg` 确认；不可用时不要为此装工具——直接用正文两列表格并排（GitHub 会渲染成左右对比），动画给关键帧序列。
 
 正文并排写法（比拼成一张图更清晰，还自带状态标注）：
