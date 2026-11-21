@@ -60,6 +60,7 @@
 - **禁止改写 main/master 历史**（主工作树/main 分支）：`reset --hard`、`push --force`、`rebase`；分支内整理历史一律在 Worktree 中进行。
 - **仅当需要更改项目文件时才新建 Worktree**（会产生提交的操作，单文件/typo/简单 bugfix 无例外）：所有非只读开发一律基于 Worktree 独占目录进行；严禁在主工作树上修改/提交代码，严禁在主工作树上执行 `git checkout -b` 或 `git switch -c` 切分支开发。开发分支必须通过 DSH `create_worktree` 工具（或等价的 `git worktree add`）统一放在项目根 `.agents/worktrees/<分支名>` 创建。
 - 合并统一走 PR：开发分支推送到远程 → 开 PR → CI 全绿 → `gh pr merge --rebase --delete-branch` 合并（保持线性历史，**禁止 Merge Commit**）；禁止本地 merge 后直接 push main。
+- **PR/MR 描述必须带证据（所有项目）**：固定「背景/问题（含关键 log、命令原始输出）→ 改动 → 证据（截图/录屏/接口返回，设计类给设计稿对照）→ 验证（CI 结论 + 本地/端上实测）」，让评审者不打开仓库、不跑环境即可核对；禁止只写「已修复/已通过」而不给 log/截图。截图的压缩、入库与内联方式见 `github-ci-flow` skill；纯文档改动可省截图，但「背景/问题」与「验证」不可省。
 - **开发分支只作为 PR 的 head 分支存在**：允许 `git push origin <分支>`；PR 合并后必须删除远程分支。远程只应存在主干分支、dsh-plugins 的 `alpha` 适配线与 CI 自动创建的分支（dependabot 等）。
 - **发版 tag 一个一个推，推完确认再推下一个**；禁止 `git push --tags` 与 `--follow-tags`（批量推送会静默不触发 CI，机制见 `git-workflow` skill）。
 - 详细流程（worktree 创建/PR 流程/合并后清理/commit 格式与 harness/模型署名/打 tag 与推送纪律）见 `git-workflow` 与 `github-ci-flow` skill。
