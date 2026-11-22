@@ -249,3 +249,4 @@ gh run rerun <run-id>                   # 怀疑 flaky 时重跑同一 run
 - **组织仓库需要 admin 权限才能改保护规则**；不是 admin 时跳过平台强制，仅按流程执行。
 - **发布 tag 流程不变**：发版仍按 `git-workflow` 的 tag 纪律，一个一个推；PR 流程只管日常合并。
 - **裸跑 `gh run view` 会交互式卡死**：不带 run ID 时 gh 会触发终端方向键交互选择（`? Select a workflow run`），在非交互式后台中无限 hang 住，必须通过 `gh run list --json databaseId` 获取明确 ID 后再查看。
+- **`gh pr view --json` 没有 `merged`/`draft` 字段**（报 `Unknown JSON field`）：合并状态用 `state`（OPEN/CLOSED/MERGED）与 `mergedAt`，draft 用 `isDraft`；脚本化查询 PR 状态时按这些字段取值，CI 明细用 `statusCheckRollup`（以 `__typename` 区分 CheckRun 与 StatusContext）。
