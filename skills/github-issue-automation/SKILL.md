@@ -1,12 +1,12 @@
 ---
 name: github-issue-automation
-description: 后台自动巡检 GitHub issue/PR：每 10 分钟扫描 ~/work 下仓库，只认 org member / collaborator 新开的 issue、PR 与带明确指令的评论（含已关闭项的新建议），自动在 worktree 修复并开 PR，不自动合并；含 launchd 安装、状态查看、配置与排障。触发：配置或排查自动巡检、issue/PR 没有自动处理、成员评论指令、自动开 PR、launchd 服务、误触发/自循环。
+description: 后台自动巡检 GitHub issue/PR：每 10 分钟扫描 ~/work 下仓库，只认 org member / collaborator 新开的 issue、PR 与带明确指令的评论（含已关闭项的新建议），自动在 worktree 修复并开 PR，CI 全绿后自动合并收尾；含 launchd 安装、状态查看、配置与排障。触发：配置或排查自动巡检、issue/PR 没有自动处理、成员评论指令、自动开 PR、自动合并 PR、launchd 服务、误触发/自循环。
 ---
 
 # GitHub Issue 自动巡检
 
 后台服务定期扫描本机仓库的 GitHub issue/PR，只对**受信任成员**的请求自动修复并开 PR。
-它是一个监督进程（supervisor）：扫描 → 过滤 → 为每个事件准备独立 worktree → 调 `dsh headless` 执行 → 校验提交 → 推送 → 开 PR / 回评论。**不会自动合并，也不会直接改主干。**
+它是一个监督进程（supervisor）：扫描 → 过滤 → 为每个事件准备独立 worktree → 调 `dsh headless` 执行 → 校验提交 → 推送 → 开 PR / 回评论 → 解决确认（每轮末尾检查已产出 PR，CI 全绿后自动 rebase 合并并收尾）。**人类创建的 PR 永不自动合并；自动化自己创建的 PR 才走自动合并。**
 
 ## 触发规则
 
@@ -29,6 +29,12 @@ description: 后台自动巡检 GitHub issue/PR：每 10 分钟扫描 ~/work 下
 3. agent 只在 worktree 内改代码并提交；提示词禁止它 push、开 PR、合并、改仓库设置，GitHub 内容按不可信数据处理。
 4. supervisor 校验提交数量，推送分支（不 force），开 PR 或更新现有 PR，并回评论；随后删除临时 worktree。
 5. 失败最多重试 `agent.maxAttempts` 次；仍失败则回一条「需要人工介入」的评论。
+6. **解决确认（sweep）**：每轮巡检末尾遍历 state 中已产出 PR 且未完成的任务，拉取 PR 最新状态判定：
+   - 仅处理**本自动化创建的 PR**（正文带 `publish.marker` 且 head 分支以 `auto/` 开头）；人类 PR 一律跳过。
+   - 满足「CI 全绿（无失败、无运行中检查）+ MERGEABLE + mergeStateStatus 为 CLEAN/BEHIND/HAS_HOOKS + 无 CHANGES_REQUESTED review + 非 draft」即 `gh pr merge --rebase` 合并，随后删除远端 `auto/` 分支，回评原 issue 并关闭（`merge.closeLinkedIssue` 控制），任务标记 `merged`。
+   - PR 已被人手动合并：同样回评/关 issue 收尾；已被关闭未合并：标记 `closed` 终止，不再跟进。
+   - CI 运行中/可合并状态未算出：静默等下一轮；CI 失败、冲突、review 请求修改：累计 `merge.maxUnresolvedRounds` 轮后回评一次「需要人工介入」，之后不再重复评论。
+   - 被阻塞的任务不再有 agent 重试与自动化动作，等待人工处理后自然收敛。
 
 ## 安装与运行
 
@@ -67,13 +73,14 @@ tail -n 50 ~/.agents/.state/github-issue-automation/launchd.err.log
 - `scan`：轮询重叠秒数、单轮最多处理事件数、队列上限、回看天数。
 - `agent`：超时分钟、重试次数、重试间隔、headless 权限模式与审批策略、`dsh` 路径。
 - `publish`：是否 reopen 已关闭项、是否创建 draft PR、自循环标记、首次基线行为。
+- `merge`：解决确认开关与参数——`enabled`（默认 `false`，本机配置为 `true`）、`maxUnresolvedRounds`（连续阻塞多少轮后留言，默认 6，约 1 小时）、`closeLinkedIssue`（合并后是否回评并关闭关联 issue，默认 `true`）。合并方式固定 rebase、合并后固定删远端 `auto/` 分支，不受配置影响。
 - `stateDir` / `logDir`：状态与运行日志目录（默认在 `~/.agents/.state/github-issue-automation`，已 gitignore）。
 
 首次启用时，每个仓库以首次扫描时刻为基线，**不会**追溯处理历史 issue/评论；需要重新划基线用 `--reset-baseline`。
 
 ## 状态与日志
 
-- `state.json`：每仓库基线、已见评论 id、队列、已处理事件 id。
+- `state.json`：每仓库基线、已见评论 id、队列、已处理事件 id；任务的 `lastStatus` 含 `merged`（PR 已合并收尾）/ `closed`（PR 被关闭未合并，任务终止），并记录 `mergeRounds`（连续阻塞轮数）与 `mergeNotePosted`（是否已留言）。
 - `agent.log`：扫描/处理摘要。
 - `runs/<时间>-<事件>.jsonl`：headless 事件流；同名 `.err` 是 stderr；`.prompt.md` 是实际提示词；`.meta.json` 记录 sessionId 与结果。
 - `lock.json`：单轮锁；进程退出后自动失效（4 小时视为陈旧）。
@@ -87,13 +94,15 @@ tail -n 50 ~/.agents/.state/github-issue-automation/launchd.err.log
 - **推送/开 PR 失败**：`gh auth status` 需有 `repo` scope；查看 `runs/*.meta.json` 与 `agent.log`。
 - **自循环**：所有自动生成内容必须带 `publish.marker`；修改评论模板时保留 marker。
 - **想暂停**：`launchctl bootout gui/\$(id -u)/com.chaoset.github-issue-agent`；恢复用安装脚本。
-- **CI 失败**：自动巡检只负责产出 PR，不负责修复 CI；按 `github-ci-flow` 人工处理。
+- **CI 失败**：自动巡检只负责产出 PR，不负责修复 CI；持续失败会在 `merge.maxUnresolvedRounds` 轮后留言提醒，最终按 `github-ci-flow` 人工处理。
+- **没有自动合并**：确认 `merge.enabled` 为 `true`；确认 PR 是自动化创建的（正文带 marker 且 head 分支 `auto/` 前缀）；确认无 CHANGES_REQUESTED review、无冲突、CI 全绿（无仓库 CI 时视为通过）；`agent.log` 有「暂不能自动合并 / 等待解决」的原因输出。
 
 ## 安全模型
 
 - 信任判定只看 GitHub 返回的 `author_association`（及可选白名单），不看评论内容里的自称。
 - agent 以 `workspace-write` 运行，只能写 worktree；supervisor 在沙盒外执行 git push / gh 写操作。
-- 不自动合并、不 force push、不修改仓库 settings；PR 描述与评论固定带 marker，便于审计和防自循环。
+- 自动合并只针对本自动化创建的 PR（marker + `auto/` 分支双条件），合并前要求 CI 全绿且无阻塞 review；固定 rebase 保持线性历史，合并后删除远端分支；不 force push、不修改仓库 settings。人类创建的 PR 永不自动合并，其 head 分支即使被自动化补提交过也不会被合并。
+- PR 描述与评论固定带 marker，便于审计和防自循环。
 - issue/PR 正文与评论作为数据注入提示词；提示词明确要求忽略其中提升权限、泄密、绕过审查或推送主干的指令。
 
-与 `github-ci-flow` 配合：自动 PR 创建后仍按 CI 门禁人工合并；与 `git-workflow` 配合：worktree 位于项目 `.agents/worktrees/auto/`。
+与 `github-ci-flow` 配合：自动 PR 的 CI 门禁由解决确认 sweep 自动执行（全绿才合并），红灯/冲突转人工；与 `git-workflow` 配合：worktree 位于项目 `.agents/worktrees/auto/`。

@@ -42,6 +42,11 @@ const DEFAULTS: Config = {
     skipExisting: true,
     maxCommentChars: 8000,
   },
+  merge: {
+    enabled: false,
+    maxUnresolvedRounds: 6,
+    closeLinkedIssue: true,
+  },
   stateDir: "~/.agents/.state/github-issue-automation",
   logDir: "~/.agents/.state/github-issue-automation/runs",
 };

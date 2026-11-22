@@ -27,6 +27,11 @@
     "skipExisting": true,
     "maxCommentChars": 8000
   },
+  "merge": {
+    "enabled": true,
+    "maxUnresolvedRounds": 6,
+    "closeLinkedIssue": true
+  },
   "stateDir": "/Users/liyou/.agents/.state/github-issue-automation",
   "logDir": "/Users/liyou/.agents/.state/github-issue-automation/runs"
 }
