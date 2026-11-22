@@ -90,6 +90,7 @@ tail -n 50 ~/.agents/.state/github-issue-automation/launchd.err.log
 - **没有触发**：确认评论者 `author_association` 是 OWNER/MEMBER/COLLABORATOR；确认正文命中 `directives.patterns` 且不含否定词；确认没有带 marker；用 `--dry-run --repo ...` 看扫描结果。
 - **没有执行**：看 `launchd.err.log` 与 `runs/*.err`。`dsh` 依赖 node（shebang），launchd 的 PATH 由安装脚本写入；`~/.dsh` 需可写。
 - **launchctl 报 I/O error**：在 DSH 沙盒内无法调用 launchd，改用 Terminal 执行 `scripts/activate.command`。
+- **DSH 会话内手动跑完整巡检，headless agent 报 EPERM**：沙盒会话里 `bun src/scan.ts` 处理事件时，`dsh --profile headless` 子进程打不开 `~/.dsh/profiles/headless/cordis.yml`（`runs/*.err` 见 `code: 'EPERM', syscall: 'open'`）——沙盒伪象，launchd（沙盒外）不受影响。会话内只跑 `--status` / `--dry-run`，需要完整轮次时在 Terminal 跑或等 launchd。
 - **卡住**：检查 `lock.json` 中 pid 是否仍存活；确认没有残留 `dsh --profile headless` 进程。
 - **推送/开 PR 失败**：`gh auth status` 需有 `repo` scope；查看 `runs/*.meta.json` 与 `agent.log`。
 - **自循环**：所有自动生成内容必须带 `publish.marker`；修改评论模板时保留 marker。
