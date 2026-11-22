@@ -5,6 +5,7 @@ import { hasMarker, isDirective, isTrusted } from "./policy.ts";
 import { discoverRepos, refreshRepoMeta } from "./repos.ts";
 import { acquireLock, loadState, pruneRepoState, releaseLock, repoState, saveState } from "./state.ts";
 import { commentFinalFailure, handleEvent } from "./dispatch.ts";
+import { sweepAutoMerge } from "./merge.ts";
 import type { Config, Event, ItemState, RepoMeta, RepoState, State } from "./types.ts";
 
 const orgMembersCache = new Map<string, Set<string>>();
@@ -421,6 +422,12 @@ function printStatus(state: State, cfg: Config): void {
     for (const entry of repo.queue) {
       console.log("  queue: " + entry.event.id + " attempts=" + entry.attempts + " next=" + (entry.nextTryAt ?? "-") + " lastError=" + (entry.lastError ?? "-"));
     }
+    for (const [key, item] of Object.entries(repo.items)) {
+      if (!item.prNumber) continue;
+      if (item.lastStatus === "merged" || item.lastStatus === "closed") continue;
+      console.log("  pending-pr: " + key + " pr#" + item.prNumber + " status=" + item.lastStatus
+        + " mergeRounds=" + (item.mergeRounds ?? 0) + " prUrl=" + (item.prUrl ?? "-"));
+    }
   }
 }
 
@@ -498,6 +505,11 @@ async function main(): Promise<void> {
     }
 
     const processed = await processQueue(state, cfg, repos);
+    const sweep = await sweepAutoMerge(state, cfg, repos);
+    if (sweep.checked) {
+      log(cfg, "解决确认：检查 " + sweep.checked + " 个 PR，自动合并 " + sweep.merged
+        + "，等待 " + sweep.waiting + "，阻塞 " + sweep.blocked + "，终止 " + sweep.closed);
+    }
     state.lastRunAt = new Date().toISOString();
     state.lastRunStatus = "ok";
     saveState(cfg, state);

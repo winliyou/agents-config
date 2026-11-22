@@ -21,12 +21,14 @@ export interface ItemState {
   seenComments: number;
   seenReviews: number;
   seenReviewComments: number;
-  lastStatus: "baseline" | "handled" | "no-change" | "failed" | "gave-up" | "skipped";
+  lastStatus: "baseline" | "handled" | "no-change" | "failed" | "gave-up" | "skipped" | "merged" | "closed";
   lastHandledAt?: string;
   lastEventId?: string;
   prNumber?: number;
   prUrl?: string;
   attempts: number;
+  mergeRounds?: number;
+  mergeNotePosted?: boolean;
 }
 
 export type EventKind = "new_issue" | "new_pr" | "issue_comment" | "pr_review" | "pr_review_comment";
@@ -118,6 +120,11 @@ export interface Config {
     marker: string;
     skipExisting: boolean;
     maxCommentChars: number;
+  };
+  merge: {
+    enabled: boolean;
+    maxUnresolvedRounds: number;
+    closeLinkedIssue: boolean;
   };
   stateDir: string;
   logDir: string;

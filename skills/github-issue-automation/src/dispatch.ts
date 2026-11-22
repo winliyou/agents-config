@@ -43,7 +43,7 @@ function stamp(): string {
   return String(d.getFullYear()) + pad(d.getMonth() + 1) + pad(d.getDate()) + "-" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
 }
 
-function tempFile(cfg: Config, name: string, body: string): string {
+export function tempFile(cfg: Config, name: string, body: string): string {
   const dir = join(cfg.stateDir, "tmp");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, stamp() + "-" + name);
@@ -195,9 +195,12 @@ function fallbackPrTitle(ev: Event): string {
 }
 
 function buildPrBody(ev: Event, run: AgentRun, plan: WorktreePlan, headSha: string): string {
+  const refLine = ev.isPullRequest
+    ? "关联 PR #" + ev.number + "：" + ev.title
+    : "Fixes #" + ev.number + "：" + ev.title;
   return [
     "## 背景",
-    "关联 #" + ev.number + "：" + ev.title,
+    refLine,
     "",
     "触发人：@" + ev.author + "（" + ev.association + "）",
     "触发位置：" + ev.instructionUrl,
@@ -210,7 +213,7 @@ function buildPrBody(ev: Event, run: AgentRun, plan: WorktreePlan, headSha: stri
     "",
     "提交：" + headSha,
     "",
-    "> 本 PR 由 DSH 自动巡检创建，不会自动合并，等待人工审核。",
+    "> 本 PR 由 DSH 自动巡检创建；CI 全绿且无阻塞 review 后将自动合并完成收尾。",
     "",
     "<!-- dsh-issue-agent -->",
     "",
