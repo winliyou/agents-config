@@ -54,7 +54,7 @@ git branch -d <type>/<slug>
 
 - 提交与 PR 创建完成后立即删除 `.workwork` 里的 commit-msg 与 pr-body 临时文件；worktree 收尾时整个 `.workwork/` 随目录丢弃，主工作树写的那份自己清（规则见 `workspace-and-shell` skill 的 `.workwork` 生命周期）。
 - 合并方式统一 `--rebase`：线性历史、无 Merge Commit，保留分支内提交；不用 `--merge`，也不用 `--squash`（除非用户明确要求）。
-- PR 标题/正文用中文；正文按下节「PR/MR 描述：证据与排查记录」四段式写全（含 CI run 链接与截图/日志）。创建 PR 时按 `dsh-badge` skill 在正文末尾加 powered by dsh 徽章。
+- PR 标题/正文用中文；正文按下节「PR/MR 描述：证据与排查记录」四段式写全（含 CI run 链接与截图/日志）。创建 PR 时按 `dsh-badge` skill 在**正文最后一行**加 powered by dsh 徽章——首行必须是「## 背景 / 问题」，**徽章不得前置**（前置会让评审第一眼看到徽章而不是问题）。
 - **PR 未全绿不得合并**；失败先修再推，禁止 `--admin` 绕过（除非用户在会话中明确要求）。
 - 一个 PR 只做一件事；基线始终是本地最新 main（先 `git fetch` + 确认 main 已同步）。
 
