@@ -47,7 +47,7 @@ description: 通用 Figma 自动化设计排版与桌面桥工作流：强关联
 
 ### 关键设计约定
 1. **沙盒边界规约**：Figma 场景主线程（`code.js`）运行于 QuickJS 环境，无全局 `WebSocket` 与浏览器 DOM。网络连接必须由 `figma.showUI` 承载的 UI iframe（`ui.html`）建立，再经由内部消息机制桥接。
-2. **网络白名单**：桌面插件清单（`manifest.json`）必须显式声明 `networkAccess.allowedDomains`（包含 `ws://127.0.0.1:8787` 和 `http://127.0.0.1:8787`），避免现代 Figma 拦截连接。
+2. **网络白名单**：桌面插件清单（`manifest.json`）必须显式声明 `networkAccess.allowedDomains`。当前 Figma 桌面端会拒绝 `ws://` 前缀（`Manifest error: Invalid value for allowedDomains ... must be a valid URL`），本地桥需同时访问 HTTP 与 WebSocket，使用 `["*"]` + `reasoning` 说明本地开发用途；改完重新 Import plugin from manifest 再运行。
 3. **一次安装，跨项目通用**：插件不绑定任何特定业务。开发者在 Figma 桌面端只需导入一次，此后在任何项目中启动 Bridge 服务，该插件均可即开即连。
 
 ---
