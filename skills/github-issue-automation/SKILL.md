@@ -47,8 +47,7 @@ bun scripts/install-launchd.ts --kickstart      # 在 Terminal 中安装并立�
 bun scripts/install-launchd.ts --uninstall      # 卸载
 ```
 
-> `launchctl` 不能从 DSH 沙盒内调用（会报 `Bootstrap failed: 5: Input/output error`）。
-> 首次装载请在 **Terminal** 里运行上面的安装命令，或双击 `scripts/activate.command` 装载已生成的 plist；
+> `launchctl` 在默认 DSH 沙盒内会被拒绝（报 `Bootstrap failed: 5: Input/output error`）；需要对安装命令申请一次性更宽松权限（由用户审批）后在会话内执行，或在 **Terminal** 里运行安装命令 / 双击 `scripts/activate.command` 装载已生成的 plist。
 > 停止用 `scripts/deactivate.command`。
 
 launchd label：`com.chaoset.github-issue-agent`。配置了 `schedule.windows` 时用 `StartCalendarInterval`（只在允许时段内的 `schedule.intervalMinutes` 整点上唤醒，窗口外完全不启动）；未配置时退回 `StartInterval` 固定间隔。`RunAtLoad` 会在装载时跑一次，扫描侧的时间窗判定会拦下窗口外的这次启动。
@@ -91,7 +90,7 @@ tail -n 50 ~/.agents/.state/github-issue-automation/launchd.err.log
 - **没有触发**：确认评论者 `author_association` 是 OWNER/MEMBER/COLLABORATOR；确认正文命中 `directives.patterns` 且不含否定词；确认没有带 marker；用 `--dry-run --repo ...` 看扫描结果。
 - **没有执行**：看 `launchd.err.log` 与 `runs/*.err`。`dsh` 依赖 node（shebang），launchd 的 PATH 由安装脚本写入；`~/.dsh` 需可写。
 - **launchctl 报 I/O error**：在 DSH 沙盒内无法调用 launchd，改用 Terminal 执行 `scripts/activate.command`。
-- **DSH 会话内手动跑完整巡检，headless agent 报 EPERM**：沙盒会话里 `bun src/scan.ts` 处理事件时，`dsh --profile headless` 子进程打不开 `~/.dsh/profiles/headless/cordis.yml`（`runs/*.err` 见 `code: 'EPERM', syscall: 'open'`）——沙盒伪象，launchd（沙盒外）不受影响。会话内只跑 `--status` / `--dry-run`，需要完整轮次时在 Terminal 跑或等 launchd。
+- **DSH 会话内手动跑完整巡检，headless agent 报 EPERM**：沙盒会话里 `bun src/scan.ts` 处理事件时，`dsh --profile headless` 子进程打不开 `~/.dsh/profiles/headless/cordis.yml`（`runs/*.err` 见 `code: 'EPERM', syscall: 'open'`）——沙盒伪象，launchd（沙盒外）不受影响。会话内需要完整轮次时，先按 `sandbox-adaptation` 给该 profile 目录放行，或对这条命令申请一次性更宽松权限；放行成功即可在会话内跑，放行失败才退化为 `--status` / `--dry-run` 并说明原因。
 - **headless agent 报构建缓存 `operation not permitted`**（`~/Library/Caches/go-build`、`~/.gradle` 等）：headless profile 原本没装 `@chaoset/sandbox-extra-roots`，可写根为空。修法见下节「headless 沙盒可写目录」。
 - **自动巡检在时段内没跑**：`launchctl print gui/$(id -u)/com.chaoset.github-issue-agent` 看 `event triggers` 是否为 `com.apple.launchd.calendarinterval`；改过 `schedule` 需重跑 `scripts/install-launchd.ts` 才会重写 plist。
 

@@ -10,7 +10,7 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）、�
 ## AI 中间文件落盘：项目根 `.workwork/`
 
 - AI 工作期间产生的所有中间文件一律写入项目根 `.workwork/`（需确保已加入项目 .gitignore），包括但不限于：计划文件、进度文件、任务清单、截图、设计文档草稿（SDD）、调研笔记、方案对比记录、会话记录、临时导出产物等。
-- `.workwork/` 按工作树严格隔离，不在不同 worktree 之间共享：中间文件一律写入**当前所在工作树根**下的 `.workwork/`；在 worktree 内工作时禁止读写主工作树的 `.workwork/`，反之亦然，避免并行线互相干扰。worktree 的 `.workwork/` 属该分支临时产物，随 worktree 一并删除（见 `git-workflow` skill 的合并流程，默认可丢弃）。
+- `.workwork/` 按工作树严格隔离，不在不同 worktree 之间共享：中间文件一律写入**当前所在工作树根**下的 `.workwork/`；**禁止写**另一棵树的 `.workwork/`（产物混入、误清理），只读引用可以（如取上一任务的证据/脚本），但只能作参考，不得当作本任务产物清理或当成最新事实。worktree 的 `.workwork/` 属该分支临时产物，随 worktree 一并删除（见 `git-workflow` skill 的合并流程，默认可丢弃）。
 - **按任务建子目录**：每个任务在 `.workwork/<任务 slug>/` 下工作（如 `.workwork/ui-r14/`、`.workwork/verify-rc3/`），计划、截图、日志、脚本、验证产物都放该目录；禁止把大批文件平铺在 `.workwork/` 根下——平铺后只能整体猜着删，按任务清理无从下手。
 - **禁止把 `docs/`、`doc/`、`documentation/` 等目录当作 AI 实现过程的文件目录**（计划、进度、任务清单、调研笔记等一律不得写入）；`docs/` 只存放项目的真实文档（用户文档、API 文档、架构文档等需提交的内容）。
 - 发现 AI 中间文件被误写入 `docs/` 或项目其他位置时，将其迁移到 `.workwork/` 对应位置，并视情况清理 `git status` 中多余的变更。
@@ -50,8 +50,8 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）、�
 
 ## 长文件 read→write 会静默截断
 
-- read 按行分页、超长静默截断：超长文件禁止 read→write 整文件往返，写回会静默丢尾。改大文件用字节级精确操作（`sed -i` 按行寻址、python 按行替换），改完用 `git diff --numstat`（增删应对称）+ `wc -l` 对 HEAD 验行数一致；一旦失衡立即 `git checkout` 恢复重做，不要在坏文件上继续改。
-  - **这条同样约束 python 脚本里的 `read_text()` → `replace()` → `write_text()`**：那不是「按行替换」而是整文件往返，照样截断（表现为 diff 里出现上百行删除，而实际改动只有几行；同一次脚本里改的其他文件可能根本没落盘）。**首选做法：长文件一律用 edit 工具（自带版本守卫）逐处改**；必须用脚本时只在**短文件**上用，且写盘后立刻 `git diff --numstat` 自检，失衡就 `git checkout -- <file>` 重来。
+- read 按行分页、超长静默截断：先分页读到累计行数等于 `totalLines`（或本次 read 未报截断）再整文件写回；无法确认读全时不要 read→write 整文件往返，改用按行精确操作（`sed -i` 按行寻址、python 按行替换、edit 工具）。改完用 `git diff --numstat`（增删应对称）+ `wc -l` 对 HEAD 验行数一致；一旦失衡立即 `git restore -- <file>` 恢复重做，不要在坏文件上继续改。
+  - **这条同样约束 python 脚本里的 `read_text()` → `replace()` → `write_text()`**：那不是「按行替换」而是整文件往返，照样截断（表现为 diff 里出现上百行删除，而实际改动只有几行；同一次脚本里改的其他文件可能根本没落盘）。**首选做法：长文件一律用 edit 工具（自带版本守卫）逐处改**；必须用脚本时只在**短文件**上用，且写盘后立刻 `git diff --numstat` 自检，失衡就 `git restore -- <file>` 重来。
   - 判别信号：意图只有几行改动，`git diff --stat` 却出现几十/几百行删除 —— 立即停下核对，别在该文件上继续叠加改动。
 
 ## macOS 自带 bash 3.2 的多字节变量名解析坑
