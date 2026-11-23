@@ -46,12 +46,16 @@ gh pr checks <PR 号> --watch --interval 30
 gh pr ready <PR 号>
 gh pr merge <PR 号> --rebase --delete-branch
 
-# 7) 本地同步 + 清理 worktree（主工作树执行）
+# 7) 会话收尾：本地同步 + 清理 worktree（主工作树执行）
+#    仅当 PR 已确认 MERGED、tag/Release/发布验证与 PR 评论等全部完成、
+#    删除后不再需要本会话执行工具时才执行；删除后 cwd 失效，持久代码环境无法继续。
+gh pr view <PR 号> --json state,mergedAt        # 必须返回 "state":"MERGED"
 git fetch --prune && git pull --ff-only
 git worktree remove .agents/worktrees/<type>/<slug>
 git branch -d <type>/<slug>
 ```
 
+- **清理是会话收尾动作，不是合并后的下一步**：先把 PR 最终状态（`gh pr view --json state,mergedAt`）、发版 tag、Release/workflow 结果、PR 评论与证据全部做完并留痕，再删 worktree；删除后本会话不再执行任何工具（cwd 失效，持久代码环境会卡死）。删除动作从主工作树执行（bash `workdir` 或命令内 `cd`），不要调 `working_directory` / `exit_worktree` 改变会话 cwd。
 - 提交与 PR 创建完成后立即删除 `.workwork` 里的 commit-msg 与 pr-body 临时文件；worktree 收尾时整个 `.workwork/` 随目录丢弃，主工作树写的那份自己清（规则见 `workspace-and-shell` skill 的 `.workwork` 生命周期）。
 - 合并方式统一 `--rebase`：线性历史、无 Merge Commit，保留分支内提交；不用 `--merge`，也不用 `--squash`（除非用户明确要求）。
 - PR 标题/正文用中文；正文按下节「PR/MR 描述：证据与排查记录」四段式写全（含 CI run 链接与截图/日志）。创建 PR 时按 `dsh-badge` skill 在**正文最后一行**加 powered by dsh 徽章——首行必须是「## 背景 / 问题」，**徽章不得前置**（前置会让评审第一眼看到徽章而不是问题）。

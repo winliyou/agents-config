@@ -25,14 +25,21 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 
 日常改动一律走 GitHub PR 门禁。完整命令、CI 等待与失败排查见 `github-ci-flow` skill；本节只列顺序与清理纪律。
 
+> **清理不是合并后的下一步，而是会话收尾动作。** 删除 worktree 前必须同时满足：
+> ① PR 最终状态已确认——`gh pr view <PR> --json state,mergedAt` 返回 `MERGED`，不能只凭 `gh pr merge` 退出码；
+> ② 本会话待办全部完成——发版 tag 已推送、Release/workflow 已有结果、PR 评论与证据已发、所有需要的 `gh`/`git` 检测都已跑完；
+> ③ 删除后不再需要本会话执行任何工具。
+>
+> 删除当前 worktree 后本会话 cwd 失效，持久代码环境无法继续执行（报错样例 `persistent PTC: release the retained environment before changing its sandbox policy`），只能新开会话恢复。把检测/发版放在删除之后等于把任务截断；`gh pr merge` 打印的 "To finish cleanup..." 只是提示，不是立即删除的指令。
+
 1. Worktree 中提交（分支内可自由 rebase/reset 整理历史），推送到远程：`git push -u origin <分支>`。
 2. 立即开 PR（draft 同样触发 `pull_request` CI）：`gh pr create --draft --title ... --body-file ...`。
 3. 等待 CI：`gh pr checks <PR> --watch`；失败用 `gh run view <run-id> --log-failed` 排查，修好再推；**未全绿不得合并**。
 4. 全绿后：`gh pr ready <PR>` → `gh pr merge <PR> --rebase --delete-branch`（rebase 合并：线性历史、无 Merge Commit；禁止 `--merge`）。
 5. 主工作树同步：`git fetch --prune && git pull --ff-only`；发版 tag 打在合并后的 main 上再推送。
-6. **自动删除该 Worktree 与已合并的本地分支**，无需询问用户：
+6. **最后一步：删除该 Worktree 与已合并的本地分支**（上面三条门禁全部满足才执行，无需询问用户）：
    - 若该 worktree 启动过 compose 环境，先清理其 compose 资源；
-   - 用 `create_worktree` 进入过工作树的会话，先把工作目录切回主工作树（`working_directory({ cd: <项目主树> })` 或 shell `cd`），再执行删除——cwd 悬空会让后续命令报 `spawn /bin/zsh ENOENT`（见 `workspace-and-shell` skill）；
+   - 删除动作交给主工作树执行：bash 传 `workdir: <项目主树>` 或命令内 `cd <项目主树>`；不要为了删除调用 `working_directory` / `exit_worktree` 改会话 cwd——切目录同样会让持久环境失效。cwd 悬空会让后续命令报 `spawn /bin/zsh ENOENT`（见 `workspace-and-shell` skill）；
    - `git worktree remove .agents/worktrees/<分支名>`，再删本地分支。**rebase 合并的本地分支不是 main 的祖先**：`gh pr merge --rebase` 把提交重写到 main 上，本地分支仍指向旧提交，`git branch -d` 与 `git branch --merged main` 都会静默拒绝/列空——不能作为「已合并」的判据，也删不掉；
    - 删除前做**补丁一致性核实**，一致才 `git branch -D`。用「逐提交补丁 id」对比——rebase 重写会改 hash 与父提交，但每个提交的补丁内容不变；**不能**用 `git diff <merge-base> <main重写版>` 的区间形式：那会把 merge-base 之后合并的其他 PR 改动一并算进来，同一批顺序合并的第二个及以后的 PR 必然误报不一致（实测踩坑）：
      ```bash
