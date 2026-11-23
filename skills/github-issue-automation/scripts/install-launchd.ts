@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "../src/config.ts";
+import { calendarEntries, invalidWindows } from "../src/schedule.ts";
 
 const LABEL = "com.chaoset.github-issue-agent";
 const SKILL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -32,6 +33,31 @@ function runAllowFailure(command: string, argv: string[]): void {
   }
 }
 
+/**
+ * 调度段：配置了允许时段时用 StartCalendarInterval（launchd 只在时段内唤醒），
+ * 否则退回 StartInterval 固定间隔。
+ *
+ * 注意 StartInterval 与 StartCalendarInterval 被 launchd 独立评估，
+ * 同时存在等于两套调度叠加，所以这里二选一。
+ */
+function scheduleBlock(windows: string[], intervalMinutes: number): string[] {
+  if (!windows.length) {
+    return ["  <key>StartInterval</key>", "  <integer>" + Math.max(60, intervalMinutes * 60) + "</integer>"];
+  }
+  const entries = calendarEntries(windows, intervalMinutes);
+  const lines = ["  <key>StartCalendarInterval</key>", "  <array>"];
+  for (const entry of entries) {
+    lines.push("    <dict>");
+    lines.push("      <key>Hour</key>");
+    lines.push("      <integer>" + entry.Hour + "</integer>");
+    lines.push("      <key>Minute</key>");
+    lines.push("      <integer>" + entry.Minute + "</integer>");
+    lines.push("    </dict>");
+  }
+  lines.push("  </array>");
+  return lines;
+}
+
 function plist(bunPath: string, nodePath: string, scanPath: string, cfgPath: string): string {
   const pathValue = [dirname(nodePath), dirname(bunPath), "/opt/homebrew/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
   return [
@@ -58,8 +84,7 @@ function plist(bunPath: string, nodePath: string, scanPath: string, cfgPath: str
     "    <key>GITHUB_ISSUE_AUTOMATION_CONFIG</key>",
     "    <string>" + xmlEscape(cfgPath) + "</string>",
     "  </dict>",
-    "  <key>StartInterval</key>",
-    "  <integer>600</integer>",
+    ...scheduleBlock(loadConfig().schedule.windows, loadConfig().schedule.intervalMinutes),
     "  <key>RunAtLoad</key>",
     "  <true/>",
     "  <key>ThrottleInterval</key>",
@@ -80,6 +105,15 @@ function plist(bunPath: string, nodePath: string, scanPath: string, cfgPath: str
 
 function install(): void {
   const cfg = loadConfig();
+  const bad = invalidWindows(cfg.schedule.windows);
+  if (bad.length) {
+    console.error("时间窗写法非法：" + bad.join(", ") + "（应为 \"HH:MM-HH:MM\"）");
+    process.exit(1);
+  }
+  if (cfg.schedule.windows.length && calendarEntries(cfg.schedule.windows, cfg.schedule.intervalMinutes).length === 0) {
+    console.error("时间窗 " + cfg.schedule.windows.join(", ") + " 与间隔 " + cfg.schedule.intervalMinutes + " 分钟组合后没有任何触发点，请调小间隔。");
+    process.exit(1);
+  }
   mkdirSync(cfg.stateDir, { recursive: true });
   const bunPath = process.execPath;
   const nodePath = which("node") || join(homedir(), ".nvm", "versions", "node", "bin", "node");

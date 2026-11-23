@@ -51,7 +51,7 @@ bun scripts/install-launchd.ts --uninstall      # 卸载
 > 首次装载请在 **Terminal** 里运行上面的安装命令，或双击 `scripts/activate.command` 装载已生成的 plist；
 > 停止用 `scripts/deactivate.command`。
 
-launchd label：`com.chaoset.github-issue-agent`，每 600 秒运行一次；`RunAtLoad` 会立即跑一次。
+launchd label：`com.chaoset.github-issue-agent`。配置了 `schedule.windows` 时用 `StartCalendarInterval`（只在允许时段内的 `schedule.intervalMinutes` 整点上唤醒，窗口外完全不启动）；未配置时退回 `StartInterval` 固定间隔。`RunAtLoad` 会在装载时跑一次，扫描侧的时间窗判定会拦下窗口外的这次启动。
 运行环境由安装脚本写入 plist：`PATH` 含 node 与 bun 目录、`HOME`、`GITHUB_ISSUE_AUTOMATION_CONFIG`。
 
 常用检查：
@@ -71,6 +71,7 @@ tail -n 50 ~/.agents/.state/github-issue-automation/launchd.err.log
 - `ignoredLogins`：永远忽略的账号（默认含 dependabot 等 bot）。
 - `directives.patterns` / `negations`：评论指令的正则与否定词。
 - `scan`：轮询重叠秒数、单轮最多处理事件数、队列上限、回看天数。
+- `schedule`：`windows` 是允许巡检的本地时段数组，写法 `"HH:MM-HH:MM"`，结束早于开始表示跨午夜（如 `"18:00-09:00"`）；空数组表示不限时段。`intervalMinutes` 是时段内的触发间隔，安装脚本据此展开成 launchd 日历条目。时段外 `scan.ts` 取锁前即退出，不消耗 GitHub API 配额。人工排查用 `--force` 或 `--dry-run` 可绕过时间窗。
 - `agent`：超时分钟、重试次数、重试间隔、headless 权限模式与审批策略、`dsh` 路径。
 - `publish`：是否 reopen 已关闭项、是否创建 draft PR、自循环标记、首次基线行为。
 - `merge`：解决确认开关与参数——`enabled`（默认 `false`，本机配置为 `true`）、`maxUnresolvedRounds`（连续阻塞多少轮后留言，默认 6，约 1 小时）、`closeLinkedIssue`（合并后是否回评并关闭关联 issue，默认 `true`）。合并方式固定 rebase、合并后固定删远端 `auto/` 分支，不受配置影响。
@@ -91,6 +92,25 @@ tail -n 50 ~/.agents/.state/github-issue-automation/launchd.err.log
 - **没有执行**：看 `launchd.err.log` 与 `runs/*.err`。`dsh` 依赖 node（shebang），launchd 的 PATH 由安装脚本写入；`~/.dsh` 需可写。
 - **launchctl 报 I/O error**：在 DSH 沙盒内无法调用 launchd，改用 Terminal 执行 `scripts/activate.command`。
 - **DSH 会话内手动跑完整巡检，headless agent 报 EPERM**：沙盒会话里 `bun src/scan.ts` 处理事件时，`dsh --profile headless` 子进程打不开 `~/.dsh/profiles/headless/cordis.yml`（`runs/*.err` 见 `code: 'EPERM', syscall: 'open'`）——沙盒伪象，launchd（沙盒外）不受影响。会话内只跑 `--status` / `--dry-run`，需要完整轮次时在 Terminal 跑或等 launchd。
+- **headless agent 报构建缓存 `operation not permitted`**（`~/Library/Caches/go-build`、`~/.gradle` 等）：headless profile 原本没装 `@chaoset/sandbox-extra-roots`，可写根为空。修法见下节「headless 沙盒可写目录」。
+- **自动巡检在时段内没跑**：`launchctl print gui/$(id -u)/com.chaoset.github-issue-agent` 看 `event triggers` 是否为 `com.apple.launchd.calendarinterval`；改过 `schedule` 需重跑 `scripts/install-launchd.ts` 才会重写 plist。
+
+## headless 沙盒可写目录
+
+自动巡检以 `dsh --profile headless` 运行，沙盒是 `workspace-write`。headless profile 默认**不挂** `@chaoset/sandbox-extra-roots`，所以除 workspace 与 `--add-dir` 外一律不可写，`go build` / `gradlew` / `cargo` 会报 `Operation not permitted` 并被写进 PR 正文（历史 PR 里有一批这样的记录）。
+
+配置位置与服务一致：`~/.dsh/profiles/headless/cordis.patch.yml` 的 `sandbox-extra-roots` 条目，可写根清单与 web profile 对齐（构建缓存、Gradle、Cargo 等，直接照抄 web 那份的 `extraWritableRoots`）。
+
+安装插件：
+
+```bash
+dsh plugin --profile headless add @chaoset/sandbox-extra-roots@<与 web 相同版本>
+```
+
+> `@chaoset` 包不在 npmjs 上，profile 目录需要有 `.npmrc` 声明 scoped registry（照抄 web profile 的 `.npmrc` 即可）。
+> 缺了它会装成 npmjs 上的废弃版本（如 0.4.12），版本与 web 不一致。
+
+验证：`dsh --profile headless --dump-config | grep -A3 sandbox-extra-roots` 能看到 `extraWritableRoots`；再在 headless 里跑一次 `go build ./...`，输出中不应出现 `operation not permitted`。
 - **卡住**：检查 `lock.json` 中 pid 是否仍存活；确认没有残留 `dsh --profile headless` 进程。
 - **推送/开 PR 失败**：`gh auth status` 需有 `repo` scope；查看 `runs/*.meta.json` 与 `agent.log`。
 - **自循环**：所有自动生成内容必须带 `publish.marker`；修改评论模板时保留 marker。

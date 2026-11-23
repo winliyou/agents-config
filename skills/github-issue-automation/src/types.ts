@@ -106,6 +106,12 @@ export interface Config {
     maxIssuesPerRepo: number;
     maxLookbackDays: number;
   };
+  schedule: {
+    /** 允许巡检的本地时段，"HH:MM-HH:MM"；结束早于开始表示跨午夜。空数组表示不限。 */
+    windows: string[];
+    /** 允许时段内的触发间隔（分钟），用于生成 launchd 日历条目。 */
+    intervalMinutes: number;
+  };
   agent: {
     timeoutMinutes: number;
     maxAttempts: number;

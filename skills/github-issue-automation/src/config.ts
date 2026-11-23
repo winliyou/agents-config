@@ -27,6 +27,10 @@ const DEFAULTS: Config = {
     maxIssuesPerRepo: 200,
     maxLookbackDays: 14,
   },
+  schedule: {
+    windows: [],
+    intervalMinutes: 10,
+  },
   agent: {
     timeoutMinutes: 45,
     maxAttempts: 3,

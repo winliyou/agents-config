@@ -12,6 +12,10 @@
     "maxIssuesPerRepo": 200,
     "maxLookbackDays": 14
   },
+  "schedule": {
+    "windows": ["12:00-14:00", "18:00-09:00"],
+    "intervalMinutes": 15
+  },
   "agent": {
     "timeoutMinutes": 45,
     "maxAttempts": 3,

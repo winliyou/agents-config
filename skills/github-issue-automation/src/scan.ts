@@ -6,6 +6,7 @@ import { discoverRepos, refreshRepoMeta } from "./repos.ts";
 import { acquireLock, loadState, pruneRepoState, releaseLock, repoState, saveState } from "./state.ts";
 import { commentFinalFailure, handleEvent } from "./dispatch.ts";
 import { sweepAutoMerge } from "./merge.ts";
+import { scheduleGate } from "./schedule.ts";
 import type { Config, Event, ItemState, RepoMeta, RepoState, State } from "./types.ts";
 
 const orgMembersCache = new Map<string, Set<string>>();
@@ -30,20 +31,23 @@ interface Options {
   status: boolean;
   repoFilter?: string;
   resetBaseline: boolean;
+  /** 忽略时间窗强制执行一轮（人工排查用）。 */
+  force: boolean;
 }
 
 function parseArgs(argv: string[]): Options {
-  const options: Options = { dryRun: false, status: false, resetBaseline: false };
+  const options: Options = { dryRun: false, status: false, resetBaseline: false, force: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--dry-run") options.dryRun = true;
     else if (arg === "--status") options.status = true;
     else if (arg === "--reset-baseline") options.resetBaseline = true;
+    else if (arg === "--force") options.force = true;
     else if (arg === "--repo") { i += 1; options.repoFilter = argv[i]; }
     else if (arg === "--once" || arg === "--verbose") { /* accepted, default behavior */ }
     else if (arg.startsWith("--repo=")) options.repoFilter = arg.slice("--repo=".length);
     else if (arg === "--help" || arg === "-h") {
-      console.log("用法: bun src/scan.ts [--dry-run] [--status] [--repo <owner/name>] [--reset-baseline]");
+      console.log("用法: bun src/scan.ts [--dry-run] [--status] [--repo <owner/name>] [--reset-baseline] [--force]");
       process.exit(0);
     } else {
       console.error("未知参数: " + arg);
@@ -456,6 +460,16 @@ async function main(): Promise<void> {
     saveState(cfg, state);
     console.log("baseline 已重置为 " + now + "，队列已清空");
     return;
+  }
+
+  // 时间窗：窗口外直接退出，不取锁、不消耗 GitHub API 配额。
+  // --status 已在上面返回；--dry-run 与 --force 不受限，便于人工排查。
+  if (!options.dryRun && !options.force) {
+    const gate = scheduleGate(new Date(), cfg);
+    if (!gate.allowed) {
+      log(cfg, "跳过本轮：" + gate.reason);
+      return;
+    }
   }
 
   const locked = !options.dryRun && acquireLock(cfg);
