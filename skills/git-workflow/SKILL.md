@@ -8,12 +8,12 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 任何会产生提交的改动都要加载。AGENTS.md 保留 Git 红线的一句话摘要，本 skill 提供完整流程与命令；改红线时同步核对 AGENTS.md 对应条目，保持两处一致。
 
 - 禁止改写 main/master 历史（限主工作树/main 分支）：reset --hard、push --force、rebase；分支内整理历史（rebase/reset）一律在 Worktree 中进行，见下。
-- 合并统一走 GitHub PR：开发分支推送 → 开 PR → CI 全绿 → `gh pr merge --rebase --delete-branch`（保持线性历史，禁止 Merge Commit）；PR 流程命令见 `github-ci-flow` skill。
+- **合并统一走 GitHub PR，无分支例外**：任何改动（含功能、修复、依赖调整、文档、宿主线适配）都从**工作分支**开 PR 合入目标分支；目标分支可以是主干或仓库声明的长期适配线，但**目标分支同样不接受直接 push**。流程：工作分支推送 → 开 PR（base 为目标分支）→ CI 全绿 → `gh pr merge --rebase --delete-branch`（保持线性历史，禁止 Merge Commit）；PR 流程命令见 `github-ci-flow` skill。
 - **仅当需要更改项目文件（修改/新增/删除代码、配置、文档等会产生提交的操作；单文件、typo、简单 bugfix 等无例外）时才新建 Worktree**：开发分支必须通过 DSH `create_worktree` 工具（或等价的 `git worktree add`）独占目录创建，目录统一为项目根 `.agents/worktrees/<分支名>`，严禁在主工作树上修改/提交代码或 `git checkout -b` / `git switch -c` 切分支。
 - 只读类操作（代码梳理、架构调研、阅读/检索代码、运行不产生文件改动的命令等）不需要新建 Worktree，直接在主工作树进行。
 - 主工作树允许的操作：`git fetch`、`git pull --ff-only`、`gh pr merge`（合并 PR）、`git push`（推送合并后的 main）、发版 tag（`git tag` 打在合并后的 main 上再推送）、`git worktree add|list|remove`、`git branch -d`（清理已合并分支）以及只读命令（`status`/`log`/`diff`/`show`/`describe`…）。
 - 主工作树禁止的 git 写操作：`commit`、`checkout`、`switch`、`reset`、`rebase`、`cherry-pick`、`stash`、非 PR 流程的 `merge`、新建/改名/非 `-d` 删除的 `branch`、推送非主干分支（PR head 分支除外，见下条）。
-- **开发分支只作为 PR 的 head 分支存在**：允许在对应 Worktree 内 `git push -u origin <分支>`（用于触发 `pull_request` CI 与创建 PR）；PR 合并后必须删除远程分支（`gh pr merge --delete-branch` 或 `git push origin --delete <分支>`）。远程仓库只应存在主干分支、`~/AGENTS.md` Git 红线点名的那条长期适配线与 CI 自动创建的分支（dependabot 等）。
+- **工作分支只作为 PR 的 head 分支存在**：允许在对应 Worktree 内 `git push -u origin <分支>`（用于触发 `pull_request` CI 与创建 PR）；PR 合并后必须删除远程分支（`gh pr merge --delete-branch` 或 `git push origin --delete <分支>`）。远程仓库长期存在的只应是主干分支、项目显式声明的长期适配线（这些分支同样只接受 PR 合并，不接受直接 push）与 CI 自动创建的分支（dependabot 等）。**任何分支（含长期适配线）都不得直接 push 代码；发版 tag 只能落在已合并的提交上。**
 - 主工作树存在未提交改动且挡住合并时：若改动内容已逐字节确认完整存档进待合并分支，允许清理这些文件（`git restore <paths>`）；否则先与用户确认处置方式，不得擅自丢弃。
 - **修复敏感性验证（改坏 → 断言失败 → 恢复）的恢复步骤用 `cp` 备份，禁止用 `git checkout <file>` / `git restore <file>` 撤销探测**：探测点尚未提交时，这两条命令会把文件回退到 HEAD，直接丢掉本次全部改动（只能整份重做编辑）。恢复统一写 `cp /tmp/<name>.bak <file>`，并在探测后 `git diff --stat` 确认改动仍在。
 - 探测脚本要保证「编译通过但行为退化」，否则 build failed 会掩盖真正的断言失败（例：把参数改成空串时顺手留下未使用变量 → Go 报 declared and not used，看不到测试断言）。

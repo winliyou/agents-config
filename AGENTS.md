@@ -59,11 +59,11 @@
 
 - **禁止改写 main/master 历史**（主工作树/main 分支）：`reset --hard`、`push --force`、`rebase`；分支内整理历史一律在 Worktree 中进行。
 - **仅当需要更改项目文件时才新建 Worktree**（会产生提交的操作，单文件/typo/简单 bugfix 无例外）：所有非只读开发一律基于 Worktree 独占目录进行；严禁在主工作树上修改/提交代码，严禁在主工作树上执行 `git checkout -b` 或 `git switch -c` 切分支开发。开发分支必须通过 DSH `create_worktree` 工具（或等价的 `git worktree add`）统一放在项目根 `.agents/worktrees/<分支名>` 创建。
-- 合并统一走 PR：开发分支推送到远程 → 开 PR → CI 全绿 → `gh pr merge --rebase --delete-branch` 合并（保持线性历史，**禁止 Merge Commit**）；禁止本地 merge 后直接 push main。
+- **合并统一走 PR，无分支例外**：任何改动（含功能、修复、依赖调整、文档、宿主线适配）都从**工作分支**开 PR 合入目标分支；目标分支可以是 `main` 或仓库声明的长期适配线（如 alpha），但**任何分支都不允许直接 push 代码**（含直接推 trunk、直接推长期适配线）→ 开 PR → CI 全绿 → `gh pr merge --rebase --delete-branch` 合并（保持线性历史，**禁止 Merge Commit**）；禁止本地 merge 后直接 push。发版 tag 只能落在已合并的提交上。
 - **PR/MR 描述必须带证据（所有项目）**：固定「背景/问题（含关键 log、命令原始输出）→ 改动 → 证据（截图/录屏/接口返回）→ 验证（CI 结论 + 本地/端上实测）」，让评审者不打开仓库、不跑环境即可核对；禁止只写「已修复/已通过」而不给 log/截图。纯文档改动可省截图，但「背景/问题」与「验证」不可省。
 - **PR 正文是创造过程的档案，不是 diff 摘要**：除了「改了什么」，必须写清「为什么这么改」——设计意图与成功标准、2–3 个候选方案与被否掉的思路及理由、迭代轨迹（初版 → 调整 → 定稿）、踩过的坑、遗留问题与后续。标准是半年后回看这个 PR 仍能还原当时的决策，而不只是读懂代码。
 - **UI / 交互类改动必须带 Before / After 对比图（红线，所有项目无例外）**：凡涉及界面视觉、布局、组件样式、交互流程与反馈、动画/过渡、加载与空/错误态、响应式断点、主题（深/浅色）、无障碍、移动端与 TV 端形态的改动，PR 正文必须并排给出**同条件**的改前与改后（同视口尺寸与缩放、同主题、同数据、同状态），只给「改后」不算证据；交互/动画类再加关键帧序列或录屏；有设计稿时以设计稿为基准并写明实现与稿子的差异。**开 PR 前必须跑 `~/.agents/bin/pr-evidence-check --body <正文>`，退出码非 0 不许建 PR**（1=没图、2=图不可访问）；建完 PR 再跑一次 `pr-evidence check --post` 复核附件地址真实可访问。**真的拿不到图就别硬凑**——设备不可用、环境跑不起来时，试一次不成就停，在正文写「pr-evidence: n/a <具体原因>」，别为一张截图反复折腾环境；理由要具体，写空话按证据不足处理。采集、压缩、上传与内联见 `github-ci-flow` skill：**证据图用 `gh` 的 `--attach` 上传，禁止提交进仓库**（`.github/pr-evidence/` 这类路径是错误做法，仓库里出现一次性截图应当删除）。
-- **开发分支只作为 PR 的 head 分支存在**：允许 `git push origin <分支>`；PR 合并后必须删除远程分支。远程只应存在主干分支、dsh-plugins 的 `alpha` 适配线与 CI 自动创建的分支（dependabot 等）。
+- **工作分支只作为 PR 的 head 分支存在**：允许 `git push origin <分支>`；PR 合并后必须删除远程分支。远程长期存在的只应是主干分支、项目显式声明的长期适配线（这些分支同样只接受 PR 合并，不接受直接 push）与 CI 自动创建的分支（dependabot 等）。
 - **发版 tag 一个一个推，推完确认再推下一个**；禁止 `git push --tags` 与 `--follow-tags`（批量推送会静默不触发 CI，机制见 `git-workflow` skill）。
 - 详细流程（worktree 创建/PR 流程/合并后清理/commit 格式与 harness/模型署名/打 tag 与推送纪律）见 `git-workflow` 与 `github-ci-flow` skill。
 
