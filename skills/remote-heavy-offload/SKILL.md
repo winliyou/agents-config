@@ -222,7 +222,7 @@ offload.sh headless '在远端 workspace/myproj 跑全部测试，修复可复�
 offload.sh pull myproj <本地项目目录>
 ```
 
-- `sync/pull` 默认走 tar 管道（macOS 自带 openrsync 与远端新版 rsync 协议不兼容，不要用 rsync；机制见 `remote-agent-env`）。
+- `sync/pull` 默认走 tar 管道（macOS 自带 openrsync 与远端新版 rsync 协议不兼容，macOS→Linux 不要用 rsync；两端 rsync 版本一致时（如 Linux→Linux）可用 `rsync -a`；机制见 `remote-agent-env`）。
 - 远端 agent 在 `myproj` 里 commit 后，`pull` 会把 `.git` 一起带回来，本机 `git push` 即可（远端不配凭据也能闭环）。
 - 公开仓库更省事：直接在远端 `offload.sh run -- 'git clone <url> myproj'`。
 

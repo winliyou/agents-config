@@ -85,4 +85,4 @@ DSH 沙盒问题第一入口。**本机唯一首选解法：凡是「某个 home
 - **不得跳过功能验证**：失败就说明原因，不得用降级工具链、禁用检查等方式制造通过假象。
 - 连插件配置都覆盖不到时（路径硬编码且无配置面、嵌套沙盒不可关）：向用户请求对**单条命令**的 `danger-full-access` 提权，并说明为何前面几条不适用。审批是设计好的用户决策点，不是障碍。
 - `git worktree remove` 报 `Permission denied` 且残留 Go 模组缓存时：Go 模块缓存文件是 0444 只读，`chmod -R u+w <worktree>` 后再删（worktree 的 `.workwork/` 缓存可能残留此类文件）。
-- **反模式**：用 `GOCACHE`/`GOMODCACHE`/`npm_config_cache`/`HVIGOR_USER_HOME`/`DOCKER_CONFIG`/`ANDROID_USER_HOME`/`HOME` 重定向到 `.workwork/` 规避 home 不可写——禁止再写这类 export，也不要记进文档/skill；目录不可写按第一节加配置即可。
+- **反模式**：用 `GOCACHE`/`GOMODCACHE`/`npm_config_cache`/`HVIGOR_USER_HOME`/`DOCKER_CONFIG`/`ANDROID_USER_HOME`/`HOME` 重定向到 `.workwork/` **规避沙盒目录不可写**——不要写这类 export，也不要把它记成沙盒解法；目录不可写按第一节加配置即可。非沙盒目的（可复现构建、缓存隔离、单次排障）在单条命令内显式指定这些变量时，注明目的即可，不属此反模式。

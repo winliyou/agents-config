@@ -60,7 +60,7 @@ description: 浏览器自动化安全约定与防弹窗红线（本机）：一�
 
 核对点：主进程 `--headless=new`、`navigator.webdriver === false`、UA 为正常 Chrome、screenshot 正常、连续多轮操作后 `lsappinfo front` 始终是用户正在用的应用。**已知取舍**：headless 下真实浏览器可能识别无头特征（creepjs 类）；有 GUI 需求（WebRTC 设备、部分 WebGPU 截图）时由调用方显式 `AGENT_BROWSER_HEADED=1`——但那会抢焦点，须先确认用户可被打扰。**不要**用 init-script 篡改 `navigator.webdriver`（会被 lie 检测抓到）。
 
-- **验证前台占用禁止用 `osascript` + System Events**（会卡辅助功能授权弹窗、拖到执行超时）；用 `lsappinfo front` + `lsappinfo info -only name <ASN>`。
+- **验证前台占用优先用 `lsappinfo front` + `lsappinfo info -only name <ASN>`**。`osascript` + System Events 在未授予辅助功能权限时会卡授权弹窗、拖到执行超时，无人值守/未授权时不要用；已授权或用户明确同意时可临时使用，但不得在自动化循环里首次触发授权弹窗。
 - **抢焦点还有第二个源头：`chrome-guard` 误判后对已运行的 Chrome 执行 `open`**。headless 本身不抢焦点，但 wrapper 每次调用前跑的 Dock 守卫若判定失效，就会 `open -g -a "Google Chrome"`——对**已运行**的 app 即激活窗口（实测 2.1s 后前台被切走）。排查「频繁抢焦点」**先查这条**：`~/.agents/bin/chrome-guard --check` 应为 exit 0。根因、修复与验证矩阵见 `references/dock-and-focus-guard.md`。
 - **daemon 启动参数在首启时固化**：改 headed/args/profile 后**必须重建 owner 才生效**；重建前确认无其他会话在用，`AGENT_BROWSER_ALLOW_CLOSE_SHARED=1 agent-browser close`（普通 close 会被硬闸拦），并先看 `tab list`、告知用户（重建会关掉当前所有标签）。
 
@@ -69,7 +69,7 @@ description: 浏览器自动化安全约定与防弹窗红线（本机）：一�
 1. **禁止抢焦点 / 置顶窗口**：不得调用任何 OS 级窗口激活（AppleScript `activate`、对已运行应用 `open -a`）。**`open -g` 不等于安全**：它只保证冷启动不进前台，对已运行 app 仍会激活窗口（实测）；同理守卫拉起 GUI 必须带 `-n`，否则会被已在跑的 headless 吞掉事件（见 `references/dock-and-focus-guard.md`）。不得打断用户的键鼠输入，**禁止把默认改回 headed**；确需真窗口须先确认用户可被打扰。
 2. **禁止强切用户当前活动标签页**：严禁用 `tab <t<N>>` 切走用户正在浏览/看视频的页面（`agent-browser tab <id>` 就是切换/激活标签）。
 3. **禁止 `--auto-connect` / `--cdp 9222` 连用户日常 Chrome**（仅限用户主动提出要操作其日常 Chrome 时）：外部 CDP attach 会让 Chrome 弹「有应用正在请求远程控制」，**每次重连都会再弹一次**。
-4. **禁止杀 daemon 后重连，禁止一切重建 CDP 连接的形式**（pkill daemon、重开 WS 握手、重新 attach、重启浏览器），尤其禁止写进重试循环——每条新 DevTools 握手都会再弹一次窗，N 次重建 = N 次弹窗轰炸，自动化全废。
+4. **对用户日常 Chrome（`--auto-connect` / `--cdp 9222`）禁止杀 daemon 后重连，禁止一切重建 CDP 连接的形式**（pkill daemon、重开 WS 握手、重新 attach、重启浏览器）——每次重连都会再弹一次远程控制窗。自家 owner 只在两类条件下允许单次重建：① daemon 启动参数变更后按第 65 行的前置流程重建；② daemon 彻底僵死时按第 94 行单次 `pkill`。任何形式都不得写进重试循环。
 5. **禁止 `close --all`；禁止关闭 owner**。普通 `agent-browser close` 只关自己会话的 tab 与 daemon，是合法自清理，无需也不应加 session 参数。
 6. **禁止每次执行都 `open` 新标签**（制造孤儿标签，见「通用硬性规则·标签页复用」）。
 

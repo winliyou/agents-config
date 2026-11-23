@@ -71,9 +71,16 @@
 ## 二、Gemini 网页常规自动化（默认 headless owner）
 
 
-与上一节的差别：**不需要直连用户日常 Chrome** —— 走 wrapper 默认房客（owner = `profiles/main` headless，登录态已持久），全程零弹窗、零抢焦点。
+与上一节的差别：**不需要直连用户日常 Chrome** —— 走 wrapper 默认房客（owner = `profiles/main` headless），全程零弹窗、零抢焦点。
 
-**未登录形态（本机现状）**：owner profile 没有登录态时，Gemini 仍能附加图片（缩略图会出现），但附件处理会一直转圈、消息发不出去；且模型只有 Flash-Lite——要 Pro 质量与可靠附件处理，必须先让用户在 `profiles/main` 登录一次。
+**先查登录态，不要假定**：owner profile 的登录态会随用户登录/登出/清除 cookie 而变化，任何「已登录」「未登录」的写法都会过期。每次任务开头用命令实测：
+
+```bash
+agent-browser open 'https://gemini.google.com/app' >/dev/null 2>&1
+agent-browser eval 'JSON.stringify({needsLogin: /登录|Sign in/i.test(document.body.innerText.slice(0,1200)), model: (document.querySelector("[data-test-id*=model],button[aria-label*=model]")||{}).innerText || null})'
+```
+
+`needsLogin: true` 时**先让用户在有头窗口里登录一次**（`AGENT_BROWSER_HEADED=1 agent-browser open ...`，登录态持久化在 `profiles/main`），登录后再继续。未登录时可附加图片但附件会一直转圈、消息发不出去，且模型受限——这是**登录态导致的症状**，不是工具缺陷，补登录即可恢复，不要据此改用其它通道。
 
 **参考脚本**：按本节判据自写脚本即可（`.workwork` 属一次性工作产物，脚本随项目存放、不要跨项目引用）。脚本必须内置：可见性置前、CSS 选择器点击、菜单内注入、`naturalWidth` 校验、`textContent` + 停止按钮 + 长度稳定的三重完成判据。
 

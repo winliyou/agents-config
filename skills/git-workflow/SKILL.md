@@ -12,10 +12,10 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 - **仅当需要更改项目文件（修改/新增/删除代码、配置、文档等会产生提交的操作；单文件、typo、简单 bugfix 等无例外）时才新建 Worktree**：开发分支必须通过 DSH `create_worktree` 工具（或等价的 `git worktree add`）独占目录创建，目录统一为项目根 `.agents/worktrees/<分支名>`，严禁在主工作树上修改/提交代码或 `git checkout -b` / `git switch -c` 切分支。
 - 只读类操作（代码梳理、架构调研、阅读/检索代码、运行不产生文件改动的命令等）不需要新建 Worktree，直接在主工作树进行。
 - 主工作树允许的操作：`git fetch`、`git pull --ff-only`、`gh pr merge`（合并 PR）、`git push`（推送合并后的 main）、发版 tag（`git tag` 打在合并后的 main 上再推送）、`git worktree add|list|remove`、`git branch -d`（清理已合并分支）以及只读命令（`status`/`log`/`diff`/`show`/`describe`…）。
-- 主工作树禁止的 git 写操作：`commit`、`checkout`、`switch`、`reset`、`rebase`、`cherry-pick`、`stash`、非 PR 流程的 `merge`、新建/改名/非 `-d` 删除的 `branch`、推送非主干分支（PR head 分支除外，见下条）。
+- 主工作树禁止的 git 写操作：`commit`、`checkout`（切分支/回退提交）、`switch`、`reset`、`rebase`、`cherry-pick`、`stash`、非 PR 流程的 `merge`、新建/改名/非 `-d` 删除的 `branch`、推送非主干分支（PR head 分支除外，见下条）。**只还原单个文件用 `git restore -- <path>`**（只回退指定路径、不动提交历史），不属上述禁止项；它和 `git checkout -- <path>` 效果相同，统一用 `restore` 以免与切分支混淆。
 - **工作分支只作为 PR 的 head 分支存在**：允许在对应 Worktree 内 `git push -u origin <分支>`（用于触发 `pull_request` CI 与创建 PR）；PR 合并后必须删除远程分支（`gh pr merge --delete-branch` 或 `git push origin --delete <分支>`）。远程仓库长期存在的只应是主干分支、项目显式声明的长期适配线（这些分支同样只接受 PR 合并，不接受直接 push）与 CI 自动创建的分支（dependabot 等）。**任何分支（含长期适配线）都不得直接 push 代码；发版 tag 只能落在已合并的提交上。**
 - 主工作树存在未提交改动且挡住合并时：若改动内容已逐字节确认完整存档进待合并分支，允许清理这些文件（`git restore <paths>`）；否则先与用户确认处置方式，不得擅自丢弃。
-- **修复敏感性验证（改坏 → 断言失败 → 恢复）的恢复步骤用 `cp` 备份，禁止用 `git checkout <file>` / `git restore <file>` 撤销探测**：探测点尚未提交时，这两条命令会把文件回退到 HEAD，直接丢掉本次全部改动（只能整份重做编辑）。恢复统一写 `cp /tmp/<name>.bak <file>`，并在探测后 `git diff --stat` 确认改动仍在。
+- **修复敏感性验证（改坏 → 断言失败 → 恢复）的恢复步骤**：探测点尚未提交时，`git checkout <file>` / `git restore <file>` 会把文件回退到 HEAD、直接丢掉本次全部改动（只能整份重做编辑），此时不要用它们撤销探测；先 `cp /tmp/<name>.bak <file>` 备份，或把探测改动提交到工作分支后再测。已提交或已备份的探测点可以正常用 `git restore`。探测后 `git diff --stat` 确认改动仍在。
 - 探测脚本要保证「编译通过但行为退化」，否则 build failed 会掩盖真正的断言失败（例：把参数改成空串时顺手留下未使用变量 → Go 报 declared and not used，看不到测试断言）。
 - 每条并行线一个 Worktree，互不干扰；Worktree 内可自由 rebase/reset/amend 整理历史。
 - **构建/运行验证前先核对 HEAD 就是目标提交**：worktree 与主检出各检各的分支，构建、冒烟、插桩跑的都是**当前检出分支**的代码——以为在验证 main、实际构建的是旧分支时，观察结论整体失效。验证前 `git log --oneline -1` 核对；工作树检出的是别的分支时用 `git checkout --detach <目标提交>` 临时检出（验证完切回原分支），不要为此切走分支。
@@ -30,7 +30,7 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 > ② 本会话待办全部完成——发版 tag 已推送、Release/workflow 已有结果、PR 评论与证据已发、所有需要的 `gh`/`git` 检测都已跑完；
 > ③ 删除后不再需要本会话执行任何工具。
 >
-> 删除当前 worktree 后本会话 cwd 失效，持久代码环境无法继续执行（报错样例 `persistent PTC: release the retained environment before changing its sandbox policy`），只能新开会话恢复。把检测/发版放在删除之后等于把任务截断；`gh pr merge` 打印的 "To finish cleanup..." 只是提示，不是立即删除的指令。
+> 删除当前 worktree 后本会话 cwd 会失效，持久代码环境无法继续执行（报错样例 `persistent PTC: release the retained environment before changing its sandbox policy`）；先 `exit_worktree` 回主树再删除即可避免。把检测/发版放在删除之后等于把任务截断；`gh pr merge` 打印的 "To finish cleanup..." 只是提示，不是立即删除的指令。
 
 1. Worktree 中提交（分支内可自由 rebase/reset 整理历史），推送到远程：`git push -u origin <分支>`。
 2. 立即开 PR（draft 同样触发 `pull_request` CI）：`gh pr create --draft --title ... --body-file ...`。
@@ -39,7 +39,7 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 5. 主工作树同步：`git fetch --prune && git pull --ff-only`；发版 tag 打在合并后的 main 上再推送。
 6. **最后一步：删除该 Worktree 与已合并的本地分支**（上面三条门禁全部满足才执行，无需询问用户）：
    - 若该 worktree 启动过 compose 环境，先清理其 compose 资源；
-   - 删除动作交给主工作树执行：bash 传 `workdir: <项目主树>` 或命令内 `cd <项目主树>`；不要为了删除调用 `working_directory` / `exit_worktree` 改会话 cwd——切目录同样会让持久环境失效。cwd 悬空会让后续命令报 `spawn /bin/zsh ENOENT`（见 `workspace-and-shell` skill）；
+   - **正确顺序：收尾完成 → 切回主树 → 删除**。所有任务（PR 状态确认、tag/Release、发布验证、评论与证据）完成后，用 `exit_worktree` 把会话 cwd 切回主工作树（等价于 `working_directory({ cd: <项目主树> })`），再由主工作树执行删除（bash 传 `workdir: <项目主树>` 或命令内 `cd <项目主树>`）。`exit_worktree` 本身是该用的收尾工具，问题从来不是它，而是**在收尾前提前切/删**；cwd 悬空会让后续命令报 `spawn /bin/zsh ENOENT`（见 `workspace-and-shell` skill）；
    - `git worktree remove .agents/worktrees/<分支名>`，再删本地分支。**rebase 合并的本地分支不是 main 的祖先**：`gh pr merge --rebase` 把提交重写到 main 上，本地分支仍指向旧提交，`git branch -d` 与 `git branch --merged main` 都会静默拒绝/列空——不能作为「已合并」的判据，也删不掉；
    - 删除前做**补丁一致性核实**，一致才 `git branch -D`。用「逐提交补丁 id」对比——rebase 重写会改 hash 与父提交，但每个提交的补丁内容不变；**不能**用 `git diff <merge-base> <main重写版>` 的区间形式：那会把 merge-base 之后合并的其他 PR 改动一并算进来，同一批顺序合并的第二个及以后的 PR 必然误报不一致（实测踩坑）：
      ```bash
@@ -64,7 +64,7 @@ description: Git 工作流细则：worktree 创建、合并流程与清理、com
 7. **改动必须写在 worktree 内的路径上**：会话 cwd 是主工作树，edit/write 工具按该 cwd 解析相对路径——在 worktree 会话里用「主树路径 / 无前缀相对路径」改文件，会把改动落在**主检出**；随后在 worktree 内 `git commit` 得到 `nothing to commit`（改动仍在主树未提交，且 worktree 一旦删除，主树那份就成了游离改动）。规则：
    - 动手前 `pwd` 确认；改文件一律用 **worktree 绝对路径**（`<repo>/.agents/worktrees/<name>/...`）；
    - `git add -A` 后先看 `git status --short` 与 `git diff --stat` **非空**再 commit；空则立刻查是不是改到了主树；
-   - 已经改错时：把主树那份改动复制进 worktree 正常提交，然后 `git checkout -- <path>` 还原主树（**不要**在主树提交——那是 Git 红线），并在提交信息里如实记录。
+   - 已经改错时：把主树那份改动复制进 worktree 正常提交，然后 `git restore -- <path>` 还原主树（只回退该文件，不是切分支；**不要**在主树提交——那是 Git 红线），并在提交信息里如实记录。
    - **验证侧的对称坑**：worktree 改完后，所有核对命令（`git status`/`git diff`/`grep`/`sed`）若不带 workdir/`cd`，看到的是**主树**——会把已完成的改动误判为「没生效」，也会把主树的旧内容误当 worktree 现状，来回排查浪费时间。规则：worktree 会话里每条核对命令都必须显式带 workdir 或命令开头 `cd <worktree>`；以 worktree 内 `git diff` 为唯一事实源，不要靠记忆拼凑多轮输出。
 
 ## Commit 格式
