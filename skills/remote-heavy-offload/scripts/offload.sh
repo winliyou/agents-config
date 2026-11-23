@@ -242,7 +242,7 @@ cmd_chat() {
   local meta="$SESSION_DIR/$key.json" sid=""
   [ "$new" = 1 ] && rm -f "$meta"
   [ -f "$meta" ] && sid=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("sessionId",""))' "$meta" 2>/dev/null)
-  echo "offload chat — 目录: $dir 会话: $name（/new 新会话，/exit 退出，Ctrl-D 退出）"
+  echo "offload chat — 目录: $dir 会话: ${name}（/new 新会话，/exit 退出，Ctrl-D 退出）"
   local line out="$CACHE/last-turn.jsonl" sidfile="$CACHE/last-sid.txt" reply rc
   while true; do
     if [ -n "$sid" ]; then printf 'you> '; else printf 'you(new)> '; fi

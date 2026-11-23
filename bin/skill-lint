@@ -278,7 +278,9 @@ PYEOF
               [ -z "$pn" ] && continue
               [ ${#pn} -lt 5 ] && continue
               hit=$(grep -nE "(^|[^A-Za-z0-9_.-])${pn}([^A-Za-z0-9_-]|$)" "$chk" 2>/dev/null | head -1 | cut -c1-120)
-              [ -n "$hit" ] && emit WARN "$name" "用户级 skill 出现项目名「$pn」（项目知识应写项目侧）：$hit"
+              # ${pn} 必须带花括号：bash 3.2 在 set -u 下会把紧跟其后的全角字符首字节
+              # 并进变量名，报 "pn?: unbound variable"（「」和（）都会触发）。
+              [ -n "$hit" ] && emit WARN "$name" "用户级 skill 出现项目名「${pn}」（项目知识应写项目侧）：$hit"
             done <<< "$WORK_NAMES"
           done
         fi

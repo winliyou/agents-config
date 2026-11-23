@@ -95,11 +95,18 @@ tail -n 50 ~/.agents/.state/github-issue-automation/launchd.err.log
 - **headless agent 报构建缓存 `operation not permitted`**（`~/Library/Caches/go-build`、`~/.gradle` 等）：headless profile 原本没装 `@chaoset/sandbox-extra-roots`，可写根为空。修法见下节「headless 沙盒可写目录」。
 - **自动巡检在时段内没跑**：`launchctl print gui/$(id -u)/com.chaoset.github-issue-agent` 看 `event triggers` 是否为 `com.apple.launchd.calendarinterval`；改过 `schedule` 需重跑 `scripts/install-launchd.ts` 才会重写 plist。
 
+- **卡住**：检查 `lock.json` 中 pid 是否仍存活；确认没有残留 `dsh --profile headless` 进程。
+- **推送/开 PR 失败**：`gh auth status` 需有 `repo` scope；查看 `runs/*.meta.json` 与 `agent.log`。
+- **自循环**：所有自动生成内容必须带 `publish.marker`；修改评论模板时保留 marker。
+- **想暂停**：`launchctl bootout gui/\$(id -u)/com.chaoset.github-issue-agent`；恢复用安装脚本。
+- **CI 失败**：自动巡检只负责产出 PR，不负责修复 CI；持续失败会在 `merge.maxUnresolvedRounds` 轮后留言提醒，最终按 `github-ci-flow` 人工处理。
+- **没有自动合并**：确认 `merge.enabled` 为 `true`；确认 PR 是自动化创建的（正文带 marker 且 head 分支 `auto/` 前缀）；确认无 CHANGES_REQUESTED review、无冲突、CI 全绿（无仓库 CI 时视为通过）；`agent.log` 有「暂不能自动合并 / 等待解决」的原因输出。
+
 ## headless 沙盒可写目录
 
 自动巡检以 `dsh --profile headless` 运行，沙盒是 `workspace-write`。headless profile 默认**不挂** `@chaoset/sandbox-extra-roots`，所以除 workspace 与 `--add-dir` 外一律不可写，`go build` / `gradlew` / `cargo` 会报 `Operation not permitted` 并被写进 PR 正文（历史 PR 里有一批这样的记录）。
 
-配置位置与服务一致：`~/.dsh/profiles/headless/cordis.patch.yml` 的 `sandbox-extra-roots` 条目，可写根清单与 web profile 对齐（构建缓存、Gradle、Cargo 等，直接照抄 web 那份的 `extraWritableRoots`）。
+配置位置与服务一致：`~/.dsh/profiles/headless/cordis.patch.yml` 的 `sandbox-extra-roots` 条目，可写根清单与 web profile 对齐：`~/Library/Caches`、`~/go`、`~/.gradle`、`~/.cargo`、`~/work` 等，直接照抄 web 那份的 `extraWritableRoots`。
 
 安装插件：
 
@@ -107,16 +114,12 @@ tail -n 50 ~/.agents/.state/github-issue-automation/launchd.err.log
 dsh plugin --profile headless add @chaoset/sandbox-extra-roots@<与 web 相同版本>
 ```
 
-> `@chaoset` 包不在 npmjs 上，profile 目录需要有 `.npmrc` 声明 scoped registry（照抄 web profile 的 `.npmrc` 即可）。
+> `@chaoset` 包不在 npmjs 上，profile 目录需要有 `.npmrc` 声明 scoped registry：
+> `@chaoset:registry=https://raw.githubusercontent.com/<owner>/<repo>/market/npm/`（照抄 web profile `.npmrc` 里的实际地址）。
 > 缺了它会装成 npmjs 上的废弃版本（如 0.4.12），版本与 web 不一致。
 
 验证：`dsh --profile headless --dump-config | grep -A3 sandbox-extra-roots` 能看到 `extraWritableRoots`；再在 headless 里跑一次 `go build ./...`，输出中不应出现 `operation not permitted`。
-- **卡住**：检查 `lock.json` 中 pid 是否仍存活；确认没有残留 `dsh --profile headless` 进程。
-- **推送/开 PR 失败**：`gh auth status` 需有 `repo` scope；查看 `runs/*.meta.json` 与 `agent.log`。
-- **自循环**：所有自动生成内容必须带 `publish.marker`；修改评论模板时保留 marker。
-- **想暂停**：`launchctl bootout gui/\$(id -u)/com.chaoset.github-issue-agent`；恢复用安装脚本。
-- **CI 失败**：自动巡检只负责产出 PR，不负责修复 CI；持续失败会在 `merge.maxUnresolvedRounds` 轮后留言提醒，最终按 `github-ci-flow` 人工处理。
-- **没有自动合并**：确认 `merge.enabled` 为 `true`；确认 PR 是自动化创建的（正文带 marker 且 head 分支 `auto/` 前缀）；确认无 CHANGES_REQUESTED review、无冲突、CI 全绿（无仓库 CI 时视为通过）；`agent.log` 有「暂不能自动合并 / 等待解决」的原因输出。
+
 
 ## 安全模型
 
