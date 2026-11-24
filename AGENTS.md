@@ -34,6 +34,7 @@
 - **浏览器自动化清理（红线）**：任务收尾（给出最终答复前）必须立即 `agent-browser close`，**禁止把清理推给「会话结束」**（DSH 没有会话结束钩子；用户常在任务完成后直接开新会话/换新任务）；同一会话开始新任务前先确认无自己的残留。异常中断（abort/报错/关窗口）由空闲租约自动兜底（15 分钟，见 `browser-automation-safety` skill）——兜底不是豁免理由。
 - **长驻资源及时回收（红线）**：AI 或脚本触发的构建、工具不得留下常驻后台进程——Gradle 一律 `--no-daemon`（本机 `~/.gradle/gradle.properties` 已设 `org.gradle.daemon=false` 兜底），Kotlin 编译守护进程、dev server、watch 进程用完即 kill；任务/会话收尾前用 `pgrep -fl 'GradleDaemon|KotlinCompileDaemon'` 等复查并清理，需要时再启动，禁止空转占资源。
 - **AI 中间产物清理（红线）**：任务收尾（给出最终答复前）必须删除本次任务在 `.workwork/` 下生成的临时文件，并用 `du -sh .workwork` 复核；**worktree 的 `.workwork/` 随 worktree 删除，主工作树的不会**，是最容易长期残留占盘的一类。无法判断归属时按 `workspace-and-shell` skill 的 `.workwork` 生命周期处理（运行时数据目录按项目 AGENTS.md 声明豁免）；跨项目遗留用 `~/.agents/bin/workwork-gc` 巡检/清理，开始新任务前先确认无自己上次任务的残留。
+- **Shell 脚本参数展开一律写 `${VAR}`（红线）**：`$VAR` 后紧跟中文/全角字符时，本机 bash 3.2 会把该字节并入变量名——`set -u` 下 `unbound variable` 中断，否则静默丢字符；该坑已在多个项目反复出现，禁止靠目测。脚本落盘/提交前跑 `~/.agents/bin/shell-var-brace-check`（`--fix` 自动修），细节与判据见 `workspace-and-shell` skill。
 
 ## 敏感凭据（红线）
 

@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""shell-var-brace-check —— 检查/修复 shell 脚本里 `$VAR` 紧跟非 ASCII 字符的写法。
+
+背景（本机可复现）：macOS 自带 bash 3.2 在 UTF-8 locale 下解析 `$VAR` 时，会把紧跟的
+多字节字符首字节并入变量名——`set -u` 下报 `VAR<0xXX>: unbound variable` 并中断；
+无 `set -u` 时不报错但静默丢字符（输出被截断）。正确写法一律是 `${VAR}` 显式定界。
+
+用法：
+  shell-var-brace-check [--fix] [路径...]
+  - 路径可为文件或目录（目录递归扫描 .sh/.bash 与 bash/sh shebang 文件）；
+  - 缺省路径 = 当前 git 仓库暂存区文件（不在 git 仓库时扫描当前目录）；
+  - --fix：把命中的 `$VAR` 自动改写为 `${VAR}`（只改后面紧跟非 ASCII 的位置）。
+
+退出码：0 = 无问题或已全部修复；1 = 存在未修复问题；2 = 用法错误。
+"""
+import sys
+import os
+import re
+import subprocess
+
+RE = re.compile(r'\$([A-Za-z_][A-Za-z0-9_]*)(?=[^\x00-\x7f])')
+SHELL_SUFFIX = ('.sh', '.bash', '.ksh')
+SKIP_DIRS = {'.git', 'node_modules', '.workwork', '.venv', 'venv', 'dist', 'build', 'target', '.agents/worktrees'}
+
+
+def is_shell_file(path: str) -> bool:
+    if path.endswith(SHELL_SUFFIX):
+        return True
+    try:
+        with open(path, 'rb') as fh:
+            first = fh.readline(200)
+    except OSError:
+        return False
+    if not first.startswith(b'#!'):
+        return False
+    lower = first.lower()
+    return b'bash' in lower or b'/sh' in lower or lower.strip().endswith(b'sh')
+
+
+def iter_files(paths):
+    for p in paths:
+        if os.path.isdir(p):
+            for root, dirs, files in os.walk(p):
+                dirs[:] = [d for d in dirs if os.path.join(root, d).replace(os.sep, '/').endswith(tuple(SKIP_DIRS)) is False]
+                dirs[:] = [d for d in dirs if d not in {'.git', 'node_modules', '.workwork', '.venv', 'venv', 'dist', 'build', 'target'}]
+                for name in files:
+                    full = os.path.join(root, name)
+                    if is_shell_file(full):
+                        yield full
+        elif os.path.isfile(p):
+            yield p
+
+
+def staged_files():
+    try:
+        out = subprocess.run(
+            ['git', 'diff', '--cached', '--name-only', '--diff-filter=ACM'],
+            capture_output=True, text=True, check=False
+        ).stdout
+    except OSError:
+        return ['.']
+    files = [line for line in out.splitlines() if line.strip()]
+    return files or ['.']
+
+
+def scan_file(path: str, report) -> int:
+    with open(path, 'rb') as fh:
+        raw = fh.read()
+    try:
+        text = raw.decode('utf-8')
+    except UnicodeDecodeError:
+        return 0
+    hits = 0
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if line.lstrip().startswith('#'):
+            continue
+        for m in RE.finditer(line):
+            hits += 1
+            col = m.start() + 1
+            var = m.group(1)
+            snippet = line.strip()
+            if len(snippet) > 120:
+                snippet = snippet[:120] + '…'
+            report.append((path, lineno, col, var, snippet))
+    return hits
+
+
+def fix_file(path: str) -> int:
+    with open(path, 'r', encoding='utf-8', errors='surrogateescape') as fh:
+        original = fh.read()
+    fixed, count = RE.subn(lambda m: '${' + m.group(1) + '}', original)
+    if count:
+        with open(path, 'w', encoding='utf-8', errors='surrogateescape') as fh:
+            fh.write(fixed)
+    return count
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    fix = False
+    if args and args[0] == '--fix':
+        fix = True
+        args = args[1:]
+    paths = args or staged_files()
+    files = list(iter_files(paths))
+    if fix:
+        total = sum(fix_file(f) for f in files)
+        print(f'shell-var-brace-check: 已修复 {total} 处 `$VAR` 紧跟非 ASCII 的写法' if total
+              else 'shell-var-brace-check: 无需修复')
+        return 0
+    report = []
+    for f in files:
+        try:
+            scan_file(f, report)
+        except OSError:
+            continue
+    if not report:
+        print(f'shell-var-brace-check: OK（检查 {len(files)} 个脚本）')
+        return 0
+    print(f'shell-var-brace-check: 发现 {len(report)} 处风险（bash 3.2 下会 unbound variable 或静默丢字符）')
+    for path, lineno, col, var, snippet in report:
+        print(f'  {path}:{lineno}:{col}  ${var} 后紧跟非 ASCII → 应为 ${{{var}}}')
+        print(f'    {snippet}')
+    print('修复：把对应位置的 $VAR 写成 ${VAR}（或运行 --fix 自动修）；再 bash -n 校验。')
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

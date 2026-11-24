@@ -1,6 +1,6 @@
 ---
 name: workspace-and-shell
-description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）、任务收尾清理与 shell 工作目录已知坑。触发：需要写计划/笔记/截图/调研草稿/临时产物，或决定中间文件该放哪、可否写进 docs/；任务收尾清理 .workwork 临时文件、主工作树 .workwork 残留占盘、跨项目清理遗留（workwork-gc）；命令莫名失败且报错指向 shell 二进制（spawn ENOENT、spawn /bin/zsh ENOENT）或 cwd 被删后全部命令失效；怀疑文件改错位置、误改主检出而非 worktree；怀疑长文件读写被静默截断丢内容。
+description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）、任务收尾清理与 shell 脚本/工作目录已知坑。触发：需要写计划/笔记/截图/调研草稿/临时产物，或决定中间文件该放哪、可否写进 docs/；任务收尾清理 .workwork 临时文件、主工作树 .workwork 残留占盘、跨项目清理遗留（workwork-gc）；写或生成 shell 脚本、`$VAR` 后接中文/全角字符、报 `unbound variable` 且变量名带乱码、输出静默少字（变量展开必须用 `${VAR}`，用 shell-var-brace-check 自检）；命令莫名失败且报错指向 shell 二进制（spawn ENOENT、spawn /bin/zsh ENOENT）或 cwd 被删后全部命令失效；怀疑文件改错位置、误改主检出而非 worktree；怀疑长文件读写被静默截断丢内容。
 ---
 
 # 工作目录与 Shell 陷阱（Workspace & Shell）
@@ -54,14 +54,24 @@ description: AI 中间文件落盘位置（.workwork/ 按工作树隔离）、�
   - **这条同样约束 python 脚本里的 `read_text()` → `replace()` → `write_text()`**：那不是「按行替换」而是整文件往返，照样截断（表现为 diff 里出现上百行删除，而实际改动只有几行；同一次脚本里改的其他文件可能根本没落盘）。**首选做法：长文件一律用 edit 工具（自带版本守卫）逐处改**；必须用脚本时只在**短文件**上用，且写盘后立刻 `git diff --numstat` 自检，失衡就 `git restore -- <file>` 重来。
   - 判别信号：意图只有几行改动，`git diff --stat` 却出现几十/几百行删除 —— 立即停下核对，别在该文件上继续叠加改动。
 
-## macOS 自带 bash 3.2 的多字节变量名解析坑
+## Shell 变量展开：一律 `${VAR}`，禁止 `$VAR` 后接非 ASCII
 
-- 脚本里「$VAR」后紧跟多字节字符（如中文省略号 …、中文标点）时，bash 3.2 会把该字符首字节并入变量名解析，报「VAR<0xe2>: unbound variable」并中断脚本；同脚本在 bash 4+/zsh 下正常，极具迷惑性。
-- 修复/预防：变量后接非 ASCII 字符时一律加花括号「${VAR}…」显式定界；写脚本时变量后直接跟 CJK 字符的写法直接避免。
-- 在 agent-browser wrapper 上同样命中：全角句号「。」也会触发；花括号定界修复有效。
-- 别以为新版 bash 就安全：沙盒/极简 PATH 下 `#!/usr/bin/env bash` 会解析到系统
-  自带的 3.2（本机 /usr/bin/bash 甚至不存在，实际命中 /bin/bash 3.2.57），写脚本
-  时按 3.2 口径直接写对（加花括号），不要赌运行环境。
+本机 `bash` / `/bin/bash` 均为 **3.2.57**（locale `zh_CN.UTF-8`）。`$VAR` 后紧跟任何非 ASCII 字节（中文、全角括号 `（`、句号 `。`、省略号 `…`）时，bash 3.2 会把该字符首字节并入变量名：
+
+- `set -u` 下直接中断：`VAR<0xXX>: unbound variable`；
+- 无 `set -u` 时不报错但**静默丢字符**（实测 `V=x; echo "$V）"` 输出只剩半个 `）`），比报错更难查。
+
+**硬规则**：写/生成任何 shell 脚本（含落盘脚本、heredoc、`bash -c` 片段）时，参数展开一律 `${VAR}` 花括号定界，不按「后面是不是中文」挑着加；不要赌运行环境是新版 bash（`#!/usr/bin/env bash` 在沙盒/极简 PATH 下仍可能命中 3.2）。
+
+**自检（脚本落地后、提交前）**：
+
+```bash
+~/.agents/bin/shell-var-brace-check path/to/script.sh   # 报出每处 `$VAR` 紧跟非 ASCII；--fix 自动加花括号
+bash -n path/to/script.sh                                # 语法兜底
+```
+
+- 工具支持目录递归（`.sh/.bash` + bash/sh shebang）、无参数时默认检查 git 暂存区脚本；退出码非 0 即存在风险，提交/CI 里可直接挡住。
+- 报错里出现 `VAR<0x..>: unbound variable` 或输出莫名少字时，先按「变量名被多字节字符首字节污染」排查，别往权限、环境、编码方向找。
 
 ## 模板串里生成 shell 的规范（TS/JS × bash）
 
