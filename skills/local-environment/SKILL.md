@@ -25,6 +25,7 @@ description: 本机环境事实：macOS 路径、已装工具、凭据归档位�
 - Godot：`/Applications/Godot_mono.app/Contents/MacOS/Godot`（mono 版，含 C# 支持）。
 - DevEco Studio：已安装。
 - Go、Rust、Docker（OrbStack）已安装。
+- **cua 桌面控制**：DSH 内置 `cua` 工具，模块为 `@deepseek-ai/dsh-cua/lib/bridge.js`（导出 `connectCua`），当前 DSH 全局安装根 `/Users/liyou/.bun/install/global/`；使用前需 macOS 辅助功能 + 屏幕录制权限（本机已授予），且桌面会话未锁定（`getCapabilities().sessionLocked` 必须为 false）。操作规范见 `cua-desktop-control` skill。
 - Node：通过 nvm 管理，已安装直接使用。
 - Bun：已安装（`~/.bun/bin/bun`，官方安装脚本），前端默认包管理器。
 - gh CLI：`/opt/homebrew/bin/gh`（Homebrew 安装；版本号会变，用时以 `gh --version` 为准，不要把数字写死），已登录 `winliyou`（git 协议 ssh）。
