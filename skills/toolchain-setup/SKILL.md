@@ -13,7 +13,7 @@ description: 工具安装方式、语言工具链命令与浏览器自动化约�
 - Rust：`cargo build` / `cargo test` / `cargo clippy` / `cargo fmt`。
 - Android：新建项目骨架优先由本机 Android Studio 的 New Project Wizard 生成；无 GUI/自动化场景可用官方模板或复制既有骨架，但必须核对 Gradle wrapper、AGP、compileSdk 版本并跑通 sync/构建后才算可用；所有 Gradle 命令需先按 `local-environment` skill 的 Android Studio 条目设置 `JAVA_HOME` 与 `ANDROID_HOME`（以 `ls` 验证该路径存在，变动时用 `mdfind` 定位）。
 - Android（续）：沙盒内 Gradle 直接跑（`~/.android`、`~/.gradle`、`~/Library/Application Support/kotlin` 已由 sandbox-extra-roots 放行；报 EPERM 就把目录加进插件配置，见 `sandbox-adaptation`）。网络类问题：wrapper 重复下载 130MB 发行版被墙 stall 时直接用已缓存发行版里的 `gradle` 二进制（`$GRADLE_USER_HOME/wrapper/dists/gradle-X-bin/*/gradle-X/bin/gradle`）；依赖下载被墙时用阿里云镜像 init 脚本（`--init-script`，注意 `PREFER_SETTINGS` 模式下仓库要补在 `settingsEvaluated` 的 `dependencyResolutionManagement` 里，加在 `allprojects` 会被拒）。
-- Android 模拟器/真机：自动启动模拟器、装 APK、拉起 Activity、截图/UI 层级/点击、logcat、JDWP(jdb) 调试的完整 CLI 流程见 `android-emulator-debug` skill（实例名用 `emulator -list-avds` 现查，不写死）。
+- Android 真机/模拟器：测试时先找符合条件的真机（已连接已授权、API/ABI 兼容、形态与能力匹配本次测试目标），没有才用模拟器；装 APK、拉起 Activity、截图/UI 层级/点击、logcat、JDWP(jdb) 调试的完整 CLI 流程见 `android-emulator-debug` skill（设备用 `adb devices -l` 现查、AVD 用 `emulator -list-avds` 现查，不写死）。
 - Gradle 命令默认加 `--no-daemon`（否则 Gradle/Kotlin Daemon 构建后 idle 数小时不退出、各占 -Xmx2g，多次构建会累积多个 java 进程撑爆内存；`--no-daemon` 让构建完进程立即退出）。单任务内需要多轮连续构建时可显式 `--daemon` 复用，任务收尾用 `gradle --stop` 回收。残留 Daemon 兜底清理见 `process-management`。
 - Gradle 文件监听快照过期：AI 进程在长生命周期的主检出上新增文件（如新测试类）后，Gradle 的文件监听快照可能不包含它们——构建 SUCCESSFUL 但新测试类**静默不执行**（test-results XML 里没有对应类，极具误导性）。核对方法：数 test-results XML 个数是否等于测试类数。规避：本地验证加 `--no-watch-fs`；或删项目 `.gradle/` 目录强制重建快照。CI 全新检出不受影响。
 - Godot：用 `local-environment` skill 的 Godot 条目路径做 headless 导出和冒烟测试。
