@@ -1,5 +1,16 @@
 import type { Config } from "./types.ts";
 
+/**
+ * 该事件是否应由巡检处理。
+ *
+ * `scan.issueOnly` 开启时只处理 issue 相关事件（新 issue、issue 评论）；
+ * 新 PR、PR review、PR 行内评论一律跳过——PR 的收尾由 sweepAutoMerge
+ * 依据 items[*].prNumber 独立完成，不依赖事件收集。
+ */
+export function acceptsEvent(isPullRequest: boolean, cfg: Config): boolean {
+  return !(cfg.scan.issueOnly && isPullRequest);
+}
+
 export function hasMarker(text: string | null | undefined, marker: string): boolean {
   if (!text) return false;
   return text.includes(marker);

@@ -1,7 +1,7 @@
 import { loadConfig } from "./config.ts";
 import { ghApiJson, ghApiObject, ghRateRemaining } from "./gh.ts";
 import { log } from "./log.ts";
-import { hasMarker, isDirective, isTrusted } from "./policy.ts";
+import { acceptsEvent, hasMarker, isDirective, isTrusted } from "./policy.ts";
 import { discoverRepos, refreshRepoMeta } from "./repos.ts";
 import { acquireLock, loadState, pruneRepoState, releaseLock, repoState, saveState } from "./state.ts";
 import { commentFinalFailure, handleEvent } from "./dispatch.ts";
@@ -144,6 +144,10 @@ async function collectRepo(
   for (const item of items) {
     const number = Number(item["number"]);
     const isPr = Boolean(item["pull_request"]);
+    // issueOnly：PR 只登记状态、不产生事件。
+    // 自动化自己开的 PR 由 sweepAutoMerge 依据 items[*].prNumber 收尾，
+    // 与事件收集无关，所以这里直接跳过不会影响合并链路。
+    if (!acceptsEvent(isPr, cfg)) continue;
     const itemKey = (isPr ? "pr:" : "issue:") + number;
     const isOurs = hasMarker(item["body"] as string | undefined, cfg.publish.marker);
     let itemState = repoStateValue.items[itemKey];
@@ -341,7 +345,12 @@ async function collectRepo(
 }
 
 function enqueue(repo: RepoState, events: Event[], cfg: Config, now: string): void {
+  // 切换 issueOnly 后，队列里可能还留着历史 PR 事件，直接丢弃免得继续被处理。
+  if (cfg.scan.issueOnly) {
+    repo.queue = repo.queue.filter((entry) => !entry.event.isPullRequest);
+  }
   for (const event of events) {
+    if (!acceptsEvent(event.isPullRequest, cfg)) continue;
     if (repo.handled.includes(event.id)) continue;
     if (repo.queue.some((entry) => entry.event.id === event.id)) continue;
     repo.queue.push({ event, attempts: 0, enqueuedAt: now });
@@ -371,6 +380,11 @@ async function processQueue(state: State, cfg: Config, repos: Map<string, { slug
     const next = findNext(state);
     if (!next) break;
     const { slug, repo, entry } = next;
+    // issueOnly 的兜底：PR 事件一律出队，不进入 agent。
+    if (!acceptsEvent(entry.event.isPullRequest, cfg)) {
+      repo.queue = repo.queue.filter((item) => item.event.id !== entry.event.id);
+      continue;
+    }
     const repoRef = repos.get(slug);
     if (!repoRef || !repo.meta) {
       repo.queue = repo.queue.filter((item) => item.event.id !== entry.event.id);

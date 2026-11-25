@@ -105,6 +105,8 @@ export interface Config {
     maxQueue: number;
     maxIssuesPerRepo: number;
     maxLookbackDays: number;
+    /** 只把 issue 相关事件（新 issue、issue 评论）纳入队列；PR 本身不再被巡检处理。 */
+    issueOnly: boolean;
   };
   schedule: {
     /** 允许巡检的本地时段，"HH:MM-HH:MM"；结束早于开始表示跨午夜。空数组表示不限。 */

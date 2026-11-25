@@ -26,6 +26,7 @@ const DEFAULTS: Config = {
     maxQueue: 30,
     maxIssuesPerRepo: 200,
     maxLookbackDays: 14,
+    issueOnly: true,
   },
   schedule: {
     windows: [],

@@ -1,11 +1,11 @@
 ---
 name: github-issue-automation
-description: 后台自动巡检 GitHub issue/PR：每 10 分钟扫描 ~/work 下仓库，只认 org member / collaborator 新开的 issue、PR 与带明确指令的评论（含已关闭项的新建议），自动在 worktree 修复并开 PR，CI 全绿后自动合并收尾；含 launchd 安装、状态查看、配置与排障。触发：配置或排查自动巡检、issue/PR 没有自动处理、成员评论指令、自动开 PR、自动合并 PR、launchd 服务、误触发/自循环。
+description: 后台自动巡检 GitHub issue：按时间窗扫描本机仓库，只认 org member / collaborator 新开的 issue 与带明确指令的评论（含已关闭项的新建议），自动在 worktree 修复并开 PR，CI 全绿后自动合并收尾；PR 本身不作为巡检输入（含 PR review、行内评论）。含 launchd 安装、状态查看、配置与排障。触发：配置或排查自动巡检、issue 没有自动处理、成员评论指令、自动开 PR、自动合并 PR、launchd 服务、误触发/自循环。
 ---
 
 # GitHub Issue 自动巡检
 
-后台服务定期扫描本机仓库的 GitHub issue/PR，只对**受信任成员**的请求自动修复并开 PR。
+后台服务定期扫描本机仓库的 GitHub issue，只对**受信任成员**的请求自动修复并开 PR。**PR 本身不是巡检输入**：新开的 PR、PR review、PR 行内评论都不再驱动 agent，只有 issue 与 issue 评论会。
 它是一个监督进程（supervisor）：扫描 → 过滤 → 为每个事件准备独立 worktree → 调 `dsh headless` 执行 → 校验提交 → 推送 → 开 PR / 回评论 → 解决确认（每轮末尾检查已产出 PR，CI 全绿后自动 rebase 合并并收尾）。**人类创建的 PR 永不自动合并；自动化自己创建的 PR 才走自动合并。**
 
 ## 触发规则
@@ -13,10 +13,10 @@ description: 后台自动巡检 GitHub issue/PR：每 10 分钟扫描 ~/work 下
 | 来源 | 条件 | 动作 |
 |---|---|---|
 | 新 issue | 作者是 OWNER / MEMBER / COLLABORATOR，状态 open | 修复并开 PR |
-| 新 PR | 作者是 OWNER / MEMBER / COLLABORATOR，状态 open | 审查 diff，必要时补提交；不合并 |
-| issue 评论 | 任意状态（含 closed）的 issue/PR，评论者是受信任成员，且正文含明确指令 | 已关闭项先 reopen；再修复/开 PR |
-| PR review | 受信任成员提交 CHANGES_REQUESTED，或 review 正文含指令 | 在 PR head 分支补提交 |
-| PR 行内评论 | 受信任成员，正文含指令 | 同上 |
+| issue 评论 | 任意状态（含 closed）的 issue，评论者是受信任成员，且正文含明确指令 | 已关闭项先 reopen；再修复/开 PR |
+| 新 PR / PR review / PR 行内评论 | — | **不处理**：`scan.issueOnly` 为 `true` 时这三类事件根本不入队 |
+
+`scan.issueOnly` 是这条边界的开关，默认 `true`。关掉它可恢复旧行为（PR 也会被审查并补提交），但自动化的正常用法是只管 issue。
 
 明确指令由 `config.json` 的 `directives.patterns` 识别，默认覆盖「解决 / 修复 / 处理 / 跟进 / 实现 / 改一下 / 看一下 / 重开 / 合并」与 `fix / resolve / address / implement / handle / reopen / merge / take a look at`；带否定词（不用 / 无需 / 暂不 / 已经解决 等）与代码块内的文本不触发。
 

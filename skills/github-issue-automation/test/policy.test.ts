@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { loadConfig } from "../src/config.ts";
-import { hasMarker, isDirective, isTrusted, slugify, stripCodeFences } from "../src/policy.ts";
+import { acceptsEvent, hasMarker, isDirective, isTrusted, slugify, stripCodeFences } from "../src/policy.ts";
 
 const cfg = loadConfig();
 
@@ -57,5 +57,27 @@ describe("helpers", () => {
   test("slug 清理", () => {
     expect(slugify("fix the login bug!")).toBe("fix-the-login-bug");
     expect(slugify("修复登录问题")).toBe("task");
+  });
+});
+
+describe("acceptsEvent", () => {
+  function withIssueOnly(issueOnly: boolean) {
+    return { ...cfg, scan: { ...cfg.scan, issueOnly } } as typeof cfg;
+  }
+
+  test("issueOnly 开启时只收 issue 事件", () => {
+    const c = withIssueOnly(true);
+    expect(acceptsEvent(false, c)).toBe(true);
+    expect(acceptsEvent(true, c)).toBe(false);
+  });
+
+  test("issueOnly 关闭时 PR 事件照常收", () => {
+    const c = withIssueOnly(false);
+    expect(acceptsEvent(false, c)).toBe(true);
+    expect(acceptsEvent(true, c)).toBe(true);
+  });
+
+  test("默认配置为只管 issue", () => {
+    expect(loadConfig().scan.issueOnly).toBe(true);
   });
 });
