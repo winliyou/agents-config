@@ -12,7 +12,7 @@ description: Docker 优先原则：服务运行、集成/E2E 测试、构建与�
 - 开发期免重复 build：优先用源码挂载、缓存卷、watch 进程、本地编译产物挂载加速，进程仍运行在容器内；修改依赖、系统包、环境变量、Dockerfile 或启动命令后，必须重建相关镜像/容器。
 - 镜像构建验证在 CI：镜像构建、容器内集成/E2E、发布前镜像验证一律由 CI workflow 在开发分支/PR 上执行（见 `github-ci-flow` skill），不在本地 `docker build`；本地 `docker build` / `compose up` 只用于交互式调试与排障。发版 tag 的 Release workflow 负责构建并分发产物，打 tag 前只需确认 main 上 CI（含镜像构建 job）全绿，不以本地镜像结果作为发布依据。
 - 镜像清理：构建或拉取新镜像后按需 `docker image prune` 清理不再使用的版本；不要把 `volume prune` 当作常规步骤。
-- 一致性记录：因硬件、GUI、Android 模拟器等原因只能在宿主机执行的验证，必须说明原因，并尽量补充 Docker 内可执行的构建、接口或服务级验证。
+- 一致性记录：因硬件、GUI、Android 真机/模拟器等只能在宿主机执行的验证，必须说明原因（移动端优先用合格真机，无真机才用模拟器），并尽量补充 Docker 内可执行的构建、接口或服务级验证。
 
 ## worktree 隔离（实战）
 

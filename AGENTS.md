@@ -46,7 +46,7 @@
 - **验证分工**：全量测试、构建、打包、E2E、镜像构建等重活一律交给 GitHub Actions，不在本机跑（避免拖慢日常使用）；本地只跑项目 AGENTS.md 列出的「秒级静态检查」。完整流程见 `github-ci-flow` skill。
 - 声明任务完成前，必须出示 **CI 实际结论**（`gh pr checks <PR>` / `gh run view <run-id>` 的输出），不能仅声明成功；PR 未全绿不得合并。
 - 本地最低验证项：format + lint（或项目 AGENTS.md 定义的等价秒级命令）；环境限制无法执行某项时必须明确说明原因，未验证不算完成。
-- CI 覆盖不到的验证（真机、模拟器、鸿蒙 hvigor、音频设备、本地 Docker 冒烟、发布前门禁等）由项目 AGENTS.md 单独列出，合并前必须实际执行。
+- CI 覆盖不到的验证（真机、模拟器、鸿蒙 hvigor、音频设备、本地 Docker 冒烟、发布前门禁等）由项目 AGENTS.md 单独列出，合并前必须实际执行。**移动端测试先找符合条件的真机（连接可用、API/版本兼容、形态与能力匹配测试目标、不擅动用户数据），没有才用模拟器**；走查记录写明设备型号+系统版本+serial（模拟器写实例名），设备与模拟器结论不得互相代替。完整判定流程见 `android-emulator-debug` / `harmony-device-debug` skill。
 - 涉及 Docker 的项目：镜像构建、容器内集成/E2E、发布前镜像验证一律交给 CI（在开发分支/PR 上执行），**不在本地 `docker build`**；本地仅在交互式调试时启动容器。发版 tag 由 Release workflow 构建并分发产物。见 `docker-workflow` 与 `github-ci-flow` skill。
 - 涉及 AGENTS.md / skill 的改动：`~/.agents/bin/skill-lint` 必须无 ERROR（日期、变更记录/时间线、踩坑记录/事故复盘类章节都是 ERROR；`--all` 覆盖项目级与项目 AGENTS.md）。
 
